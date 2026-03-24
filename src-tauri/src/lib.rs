@@ -509,6 +509,8 @@ pub struct AgentConfig {
     pub name: String,
     pub model: String,
     pub tool: String,
+    pub system_prompt: Option<String>,
+    pub mcp_servers: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -516,12 +518,18 @@ pub struct PhaseConfig {
     pub id: String,
     pub mode: String,
     pub agent: Option<String>,
+    pub directive: Option<String>,
     pub command: Option<String>,
+    pub command_args: Vec<String>,
+    pub timeout_secs: Option<i64>,
+    pub cwd_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorkflowConfig {
     pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
     pub phases: Vec<String>,
 }
 
@@ -530,6 +538,7 @@ pub struct ScheduleConfig {
     pub id: String,
     pub cron: String,
     pub workflow_ref: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -590,10 +599,15 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
 
     let agents = if let Some(serde_json::Value::Object(agents_map)) = merged.get("agents") {
         agents_map.iter().map(|(name, val)| {
+            let mcp = val["mcp_servers"].as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
             AgentConfig {
                 name: name.clone(),
                 model: val["model"].as_str().unwrap_or("default").to_string(),
                 tool: val["tool"].as_str().unwrap_or("claude").to_string(),
+                system_prompt: val["system_prompt"].as_str().map(String::from),
+                mcp_servers: mcp,
             }
         }).collect()
     } else {
@@ -602,12 +616,21 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
 
     let phases = if let Some(serde_json::Value::Object(phases_map)) = merged.get("phases") {
         phases_map.iter().map(|(id, val)| {
-            let cmd = val["command"]["program"].as_str().map(String::from);
+            let cmd_prog = val["command"]["program"].as_str().map(String::from);
+            let cmd_args = val["command"]["args"].as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let timeout = val["command"]["timeout_secs"].as_i64()
+                .or(val["timeout_secs"].as_i64());
             PhaseConfig {
                 id: id.clone(),
                 mode: val["mode"].as_str().unwrap_or("agent").to_string(),
                 agent: val["agent"].as_str().map(String::from),
-                command: cmd,
+                directive: val["directive"].as_str().map(String::from),
+                command: cmd_prog,
+                command_args: cmd_args,
+                timeout_secs: timeout,
+                cwd_mode: val["command"]["cwd_mode"].as_str().map(String::from),
             }
         }).collect()
     } else {
@@ -625,7 +648,12 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
                         .or_else(|| p["phase_ref"].as_str().map(String::from))
                 }).collect()
             }).unwrap_or_default();
-            Some(WorkflowConfig { id, phases: phase_list })
+            Some(WorkflowConfig {
+                id,
+                name: w["name"].as_str().map(String::from),
+                description: w["description"].as_str().map(String::from),
+                phases: phase_list,
+            })
         }).collect()
     } else {
         vec![]
@@ -640,6 +668,7 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
                 id,
                 cron: s["cron"].as_str().unwrap_or("").to_string(),
                 workflow_ref: s["workflow_ref"].as_str().unwrap_or("").to_string(),
+                enabled: s["enabled"].as_bool().unwrap_or(true),
             })
         }).collect()
     } else {

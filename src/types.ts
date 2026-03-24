@@ -69,17 +69,25 @@ export interface AgentConfig {
   name: string;
   model: string;
   tool: string;
+  system_prompt?: string;
+  mcp_servers: string[];
 }
 
 export interface PhaseConfig {
   id: string;
   mode: string;
   agent?: string;
+  directive?: string;
   command?: string;
+  command_args: string[];
+  timeout_secs?: number;
+  cwd_mode?: string;
 }
 
 export interface WorkflowConfig {
   id: string;
+  name?: string;
+  description?: string;
   phases: string[];
 }
 
@@ -87,6 +95,7 @@ export interface ScheduleConfig {
   id: string;
   cron: string;
   workflow_ref: string;
+  enabled: boolean;
 }
 
 export interface ProjectConfig {

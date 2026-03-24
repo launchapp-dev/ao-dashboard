@@ -466,69 +466,141 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   );
 }
 
+function cronToHuman(cron: string): string {
+  const parts = cron.split(" ");
+  if (parts.length < 5) return cron;
+  const [min, hour] = parts;
+  if (min.startsWith("*/")) return `Every ${min.slice(2)} min`;
+  if (min.includes("-") && min.includes("/")) {
+    const interval = min.split("/")[1];
+    return `Every ${interval} min`;
+  }
+  if (hour.startsWith("*/")) return `Every ${hour.slice(2)} hours`;
+  if (hour === "*" && min.match(/^\d+$/)) return `Hourly at :${min.padStart(2, "0")}`;
+  return cron;
+}
+
 function ConfigView({ config }: { config: ProjectConfig }) {
-  const agentsByName = new Map(config.agents.map((a) => [a.name, a]));
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [expandedPhase, setExpandedPhase] = useState<string | null>(null);
+
+  const sectionStyle = { background: "#111128", borderRadius: 10, padding: 12 };
+  const headerStyle = { fontSize: 11, color: "#555", textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 };
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-      <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
-        <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Workflows ({config.workflows.length})</h3>
-        {config.workflows.map((wf) => (
-          <div key={wf.id} style={{ marginBottom: 10, padding: 8, background: "#0a0a1a", borderRadius: 6, borderLeft: "3px solid #a78bfa" }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: "#a78bfa", marginBottom: 4 }}>{wf.id}</div>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {wf.phases.map((pid, i) => {
-                const phase = config.phases.find((p) => p.id === pid);
-                const agent = phase?.agent ? agentsByName.get(phase.agent) : null;
-                return (
-                  <span key={i} style={{
-                    fontSize: 9, padding: "2px 6px", borderRadius: 3,
-                    background: phase?.mode === "command" ? "#1a2a1a" : "#1a1a2e",
-                    color: phase?.mode === "command" ? "#22c55e" : "#38bdf8",
-                    border: `1px solid ${phase?.mode === "command" ? "#22c55e30" : "#38bdf830"}`,
-                  }}>
-                    {pid}{agent ? ` (${agent.model.replace("kimi-code/", "")})` : ""}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
+    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, alignContent: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Agents ({config.agents.length})</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-            {config.agents.map((a) => (
-              <div key={a.name} style={{ fontSize: 10, padding: "4px 6px", background: "#0a0a1a", borderRadius: 4, display: "flex", justifyContent: "space-between", gap: 4 }}>
-                <span style={{ color: "#38bdf8", fontWeight: 600 }}>{a.name}</span>
-                <span style={{ color: "#666" }}>{a.model.replace("kimi-code/", "")}</span>
+        <div style={sectionStyle}>
+          <h3 style={headerStyle}>Workflows ({config.workflows.length})</h3>
+          {config.workflows.map((wf) => (
+            <div key={wf.id} style={{ marginBottom: 10, padding: 8, background: "#0a0a1a", borderRadius: 6, borderLeft: "3px solid #a78bfa" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                <span style={{ fontWeight: 600, fontSize: 12, color: "#a78bfa" }}>{wf.id}</span>
+                {wf.name && <span style={{ fontSize: 10, color: "#666" }}>— {wf.name}</span>}
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Schedules ({config.schedules.length})</h3>
-          {config.schedules.map((s) => (
-            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, padding: "3px 0", borderBottom: "1px solid #1a1a2e" }}>
-              <span style={{ color: "#a78bfa", fontWeight: 600 }}>{s.id}</span>
-              <span style={{ color: "#555", fontFamily: "'JetBrains Mono', monospace" }}>{s.cron}</span>
+              {wf.description && <div style={{ fontSize: 10, color: "#555", marginBottom: 4 }}>{wf.description}</div>}
+              <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                {wf.phases.map((pid, i) => {
+                  const phase = config.phases.find((p) => p.id === pid);
+                  return (
+                    <span key={i} style={{
+                      fontSize: 9, padding: "2px 6px", borderRadius: 3, cursor: "pointer",
+                      background: phase?.mode === "command" ? "#1a2a1a" : "#1a1a2e",
+                      color: phase?.mode === "command" ? "#22c55e" : "#38bdf8",
+                      border: `1px solid ${phase?.mode === "command" ? "#22c55e30" : "#38bdf830"}`,
+                    }} onClick={() => setExpandedPhase(expandedPhase === pid ? null : pid)}>
+                      {i + 1}. {pid}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>
 
-        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
-          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Phases ({config.phases.length})</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-            {config.phases.map((ph) => (
-              <div key={ph.id} style={{ fontSize: 10, padding: "3px 6px", background: "#0a0a1a", borderRadius: 4, display: "flex", justifyContent: "space-between", gap: 4 }}>
-                <span style={{ color: ph.mode === "command" ? "#22c55e" : "#38bdf8" }}>{ph.id}</span>
-                <span style={{ color: "#444" }}>{ph.mode === "command" ? (ph.command || "cmd") : (ph.agent || "agent")}</span>
+        <div style={sectionStyle}>
+          <h3 style={headerStyle}>Schedules ({config.schedules.length})</h3>
+          {config.schedules.map((s) => (
+            <div key={s.id} style={{ padding: "6px 8px", marginBottom: 4, background: "#0a0a1a", borderRadius: 4, borderLeft: `3px solid ${s.enabled ? "#eab308" : "#333"}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "#eab308", fontWeight: 600, fontSize: 11 }}>{s.id}</span>
+                {!s.enabled && <span style={{ fontSize: 8, color: "#ef4444", background: "#1a0a0a", padding: "1px 4px", borderRadius: 2 }}>disabled</span>}
               </div>
-            ))}
-          </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                <span style={{ fontSize: 10, color: "#888" }}>{cronToHuman(s.cron)}</span>
+                <span style={{ fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono', monospace" }}>{s.cron}</span>
+              </div>
+              <div style={{ fontSize: 9, color: "#a78bfa", marginTop: 1 }}>→ {s.workflow_ref}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={sectionStyle}>
+          <h3 style={headerStyle}>Agents ({config.agents.length})</h3>
+          {config.agents.map((a) => (
+            <div key={a.name} style={{
+              padding: 8, marginBottom: 4, background: "#0a0a1a", borderRadius: 6, cursor: "pointer",
+              borderLeft: `3px solid ${expandedAgent === a.name ? "#38bdf8" : "#333"}`,
+            }} onClick={() => setExpandedAgent(expandedAgent === a.name ? null : a.name)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "#38bdf8", fontWeight: 600, fontSize: 11 }}>{a.name}</span>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <span style={{ fontSize: 9, color: "#666" }}>{a.model.replace("kimi-code/", "")}</span>
+                  <span style={{ fontSize: 9, color: "#444", background: "#1a1a2e", padding: "1px 4px", borderRadius: 2 }}>{a.tool}</span>
+                </div>
+              </div>
+              {a.mcp_servers.length > 0 && (
+                <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
+                  {a.mcp_servers.map((s) => (
+                    <span key={s} style={{ fontSize: 8, padding: "1px 4px", borderRadius: 2, background: "#1a2a1a", color: "#22c55e" }}>{s}</span>
+                  ))}
+                </div>
+              )}
+              {expandedAgent === a.name && a.system_prompt && (
+                <div style={{
+                  marginTop: 6, padding: 8, background: "#080818", borderRadius: 4, fontSize: 10, color: "#888",
+                  fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto", lineHeight: "14px",
+                }}>
+                  {a.system_prompt}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div style={sectionStyle}>
+          <h3 style={headerStyle}>Phases ({config.phases.length})</h3>
+          {config.phases.map((ph) => (
+            <div key={ph.id} style={{
+              padding: 6, marginBottom: 3, background: "#0a0a1a", borderRadius: 4, cursor: "pointer",
+              borderLeft: `3px solid ${expandedPhase === ph.id ? (ph.mode === "command" ? "#22c55e" : "#38bdf8") : "#222"}`,
+            }} onClick={() => setExpandedPhase(expandedPhase === ph.id ? null : ph.id)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: ph.mode === "command" ? "#22c55e" : "#38bdf8", fontWeight: 600, fontSize: 10 }}>{ph.id}</span>
+                <span style={{ fontSize: 9, color: "#444" }}>
+                  {ph.mode === "command" ? (ph.command ? `$ ${ph.command} ${ph.command_args.join(" ")}` : "cmd") : (ph.agent || "agent")}
+                </span>
+              </div>
+              {expandedPhase === ph.id && (
+                <div style={{ marginTop: 4, fontSize: 10, color: "#888" }}>
+                  {ph.mode === "command" && ph.command && (
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", background: "#080818", padding: 6, borderRadius: 4, marginBottom: 4 }}>
+                      <span style={{ color: "#22c55e" }}>$ {ph.command} {ph.command_args.join(" ")}</span>
+                      {ph.cwd_mode && <div style={{ color: "#555", fontSize: 9 }}>cwd: {ph.cwd_mode}</div>}
+                      {ph.timeout_secs && <div style={{ color: "#555", fontSize: 9 }}>timeout: {ph.timeout_secs}s</div>}
+                    </div>
+                  )}
+                  {ph.directive && (
+                    <div style={{ whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace", background: "#080818", padding: 6, borderRadius: 4, maxHeight: 150, overflow: "auto", lineHeight: "14px", fontSize: 9 }}>
+                      {ph.directive}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
