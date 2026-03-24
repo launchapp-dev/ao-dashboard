@@ -22,11 +22,15 @@
 
 <div align="center">
 
-<video src="https://github.com/launchapp-dev/ao-dashboard/raw/master/demo.mp4" width="800" controls autoplay muted loop></video>
-
+[<video src="https://github.com/launchapp-dev/ao-dashboard/raw/master/demo.mp4" width="800" controls autoplay muted loop></video>
+](https://github.com/user-attachments/assets/ae904190-5f96-4762-a6a8-d5b742e9a6e3
+)
 </div>
 
 <br/>
+
+
+
 
 ## What is AO Dashboard?
 
