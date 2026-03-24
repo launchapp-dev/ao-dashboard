@@ -5,41 +5,30 @@ interface Props {
     phase: string;
     index?: string;
     workflowRef: string;
+    mode?: string;
+    agent?: string;
+    command?: string;
+    model?: string;
+    isActive?: boolean;
   };
 }
 
 export function PhaseNode({ data }: Props) {
-  const { phase, index } = data;
+  const { phase, index, mode, agent, command, model, isActive } = data;
 
-  const isAgent =
-    phase.includes("implementation") ||
-    phase.includes("review") ||
-    phase.includes("triage") ||
-    phase.includes("planning") ||
-    phase.includes("reconcil") ||
-    phase.includes("product") ||
-    phase.includes("decompose") ||
-    phase.includes("smoke");
-
-  const isCommand =
-    phase.includes("push") ||
-    phase.includes("create-pr") ||
-    phase.includes("sync") ||
-    phase.includes("force-push") ||
-    phase.includes("build") ||
-    phase.includes("lint");
-
-  const color = isAgent ? "#a78bfa" : isCommand ? "#38bdf8" : "#6b7280";
-  const icon = isAgent ? "agent" : isCommand ? "cmd" : "phase";
+  const isCommand = mode === "command";
+  const color = isActive ? "#22c55e" : isCommand ? "#38bdf8" : "#a78bfa";
+  const label = isCommand ? "cmd" : "agent";
 
   return (
     <div
       style={{
-        background: "#111122",
-        border: `1px solid ${color}40`,
+        background: isActive ? "#0a1a0a" : "#111122",
+        border: `1px solid ${color}${isActive ? "" : "40"}`,
         borderRadius: 6,
-        padding: "6px 12px",
-        minWidth: 140,
+        padding: "6px 10px",
+        minWidth: 160,
+        maxWidth: 220,
         color: "#ccc",
         fontFamily: "system-ui, sans-serif",
         fontSize: 11,
@@ -48,22 +37,21 @@ export function PhaseNode({ data }: Props) {
       <Handle type="target" position={Position.Left} style={{ background: color }} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span
-          style={{
-            fontSize: 9,
-            padding: "1px 5px",
-            borderRadius: 3,
-            background: `${color}20`,
-            color,
-            fontWeight: 600,
-            textTransform: "uppercase",
-          }}
-        >
-          {icon}
+        {isActive && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#22c55e", animation: "pulse 2s infinite" }} />}
+        <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: `${color}20`, color, fontWeight: 600, textTransform: "uppercase" }}>
+          {label}
         </span>
         <span style={{ fontWeight: 500 }}>{phase}</span>
         {index && <span style={{ color: "#555" }}>({index})</span>}
       </div>
+
+      {(agent || command || model) && (
+        <div style={{ marginTop: 3, fontSize: 9, color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {isCommand && command && <span style={{ color: "#38bdf8" }}>{command}</span>}
+          {!isCommand && agent && <span style={{ color: "#a78bfa" }}>{agent}</span>}
+          {model && <span style={{ color: "#555" }}> · {model.replace("kimi-code/", "")}</span>}
+        </div>
+      )}
 
       <Handle type="source" position={Position.Right} style={{ background: color }} />
     </div>

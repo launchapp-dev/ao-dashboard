@@ -504,6 +504,158 @@ async fn start_filtered_stream(
     Ok(channel_id)
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentConfig {
+    pub name: String,
+    pub model: String,
+    pub tool: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PhaseConfig {
+    pub id: String,
+    pub mode: String,
+    pub agent: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkflowConfig {
+    pub id: String,
+    pub phases: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScheduleConfig {
+    pub id: String,
+    pub cron: String,
+    pub workflow_ref: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectConfig {
+    pub project: String,
+    pub root: String,
+    pub agents: Vec<AgentConfig>,
+    pub phases: Vec<PhaseConfig>,
+    pub workflows: Vec<WorkflowConfig>,
+    pub schedules: Vec<ScheduleConfig>,
+}
+
+#[tauri::command]
+async fn get_project_config(project_root: String) -> Result<ProjectConfig, String> {
+    let project_name = PathBuf::from(&project_root)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let wf_dir = PathBuf::from(&project_root).join(".ao").join("workflows");
+    let mut merged: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+
+    if let Ok(entries) = std::fs::read_dir(&wf_dir) {
+        let mut files: Vec<_> = entries.flatten().collect();
+        files.sort_by_key(|e| e.file_name());
+        for entry in files {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(val) = serde_yaml::from_str::<serde_json::Value>(&content) {
+                    if let Some(obj) = val.as_object() {
+                        for (k, v) in obj {
+                            match (merged.get(k), v) {
+                                (Some(serde_json::Value::Object(existing)), serde_json::Value::Object(new_obj)) => {
+                                    let mut m = existing.clone();
+                                    for (mk, mv) in new_obj {
+                                        m.insert(mk.clone(), mv.clone());
+                                    }
+                                    merged.insert(k.clone(), serde_json::Value::Object(m));
+                                }
+                                (Some(serde_json::Value::Array(existing)), serde_json::Value::Array(new_arr)) => {
+                                    let mut m = existing.clone();
+                                    m.extend(new_arr.iter().cloned());
+                                    merged.insert(k.clone(), serde_json::Value::Array(m));
+                                }
+                                _ => {
+                                    merged.insert(k.clone(), v.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let agents = if let Some(serde_json::Value::Object(agents_map)) = merged.get("agents") {
+        agents_map.iter().map(|(name, val)| {
+            AgentConfig {
+                name: name.clone(),
+                model: val["model"].as_str().unwrap_or("default").to_string(),
+                tool: val["tool"].as_str().unwrap_or("claude").to_string(),
+            }
+        }).collect()
+    } else {
+        vec![]
+    };
+
+    let phases = if let Some(serde_json::Value::Object(phases_map)) = merged.get("phases") {
+        phases_map.iter().map(|(id, val)| {
+            let cmd = val["command"]["program"].as_str().map(String::from);
+            PhaseConfig {
+                id: id.clone(),
+                mode: val["mode"].as_str().unwrap_or("agent").to_string(),
+                agent: val["agent"].as_str().map(String::from),
+                command: cmd,
+            }
+        }).collect()
+    } else {
+        vec![]
+    };
+
+    let mut seen_wf = std::collections::HashSet::new();
+    let workflows = if let Some(serde_json::Value::Array(wf_arr)) = merged.get("workflows") {
+        wf_arr.iter().filter_map(|w| {
+            let id = w["id"].as_str()?.to_string();
+            if !seen_wf.insert(id.clone()) { return None; }
+            let phase_list = w["phases"].as_array().map(|arr| {
+                arr.iter().filter_map(|p| {
+                    p.as_str().map(String::from)
+                        .or_else(|| p["phase_ref"].as_str().map(String::from))
+                }).collect()
+            }).unwrap_or_default();
+            Some(WorkflowConfig { id, phases: phase_list })
+        }).collect()
+    } else {
+        vec![]
+    };
+
+    let mut seen_sched = std::collections::HashSet::new();
+    let schedules = if let Some(serde_json::Value::Array(sched_arr)) = merged.get("schedules") {
+        sched_arr.iter().filter_map(|s| {
+            let id = s["id"].as_str()?.to_string();
+            if !seen_sched.insert(id.clone()) { return None; }
+            Some(ScheduleConfig {
+                id,
+                cron: s["cron"].as_str().unwrap_or("").to_string(),
+                workflow_ref: s["workflow_ref"].as_str().unwrap_or("").to_string(),
+            })
+        }).collect()
+    } else {
+        vec![]
+    };
+
+    Ok(ProjectConfig {
+        project: project_name,
+        root: project_root,
+        agents,
+        phases,
+        workflows,
+        schedules,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -520,6 +672,7 @@ pub fn run() {
             get_task_summary,
             get_fleet_data,
             start_filtered_stream,
+            get_project_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

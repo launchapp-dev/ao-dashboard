@@ -64,3 +64,36 @@ export interface FleetProject {
 export interface FleetData {
   projects: FleetProject[];
 }
+
+export interface AgentConfig {
+  name: string;
+  model: string;
+  tool: string;
+}
+
+export interface PhaseConfig {
+  id: string;
+  mode: string;
+  agent?: string;
+  command?: string;
+}
+
+export interface WorkflowConfig {
+  id: string;
+  phases: string[];
+}
+
+export interface ScheduleConfig {
+  id: string;
+  cron: string;
+  workflow_ref: string;
+}
+
+export interface ProjectConfig {
+  project: string;
+  root: string;
+  agents: AgentConfig[];
+  phases: PhaseConfig[];
+  workflows: WorkflowConfig[];
+  schedules: ScheduleConfig[];
+}

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import type { FleetProject, StreamEvent } from "./types";
+import type { FleetProject, StreamEvent, ProjectConfig } from "./types";
 
 const STATUS_COLORS: Record<string, string> = {
   running: "#22c55e",
@@ -219,10 +220,16 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const [streamFilter, setStreamFilter] = useState<{ type: "all" | "workflow" | "run"; value?: string; label?: string }>({ type: "all" });
   const [levelFilter, setLevelFilter] = useState("all");
   const [textFilter, setTextFilter] = useState("");
+  const [viewMode, setViewMode] = useState<"stream" | "config">("stream");
+  const [config, setConfig] = useState<ProjectConfig | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const projectEvents = events.filter((e) => e.project === p.name);
+
+  useEffect(() => {
+    invoke<ProjectConfig>("get_project_config", { projectRoot: p.root }).then(setConfig).catch(() => {});
+  }, [p.root]);
 
   const workflowRefs = new Map<string, { count: number; active: boolean }>();
   p.workflows.forEach((wf) => workflowRefs.set(wf.workflow_ref, { count: 0, active: true }));
@@ -317,6 +324,20 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
         )}
       </div>
 
+      <div style={{ display: "flex", gap: 6, padding: "0 20px 8px", flexShrink: 0 }}>
+        <button onClick={() => setViewMode("stream")} style={{
+          background: viewMode === "stream" ? "#1a1a3e" : "transparent", border: "1px solid #333",
+          color: viewMode === "stream" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
+        }}>Stream</button>
+        <button onClick={() => setViewMode("config")} style={{
+          background: viewMode === "config" ? "#1a1a3e" : "transparent", border: "1px solid #333",
+          color: viewMode === "config" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
+        }}>Config</button>
+      </div>
+
+      {viewMode === "config" && config ? (
+        <ConfigView config={config} />
+      ) : (
       <div style={{ flex: 1, display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 10, padding: "0 20px 12px", minHeight: 0, overflow: "hidden" }}>
         <div style={{ background: "#111128", borderRadius: 10, padding: 10, overflow: "auto", minWidth: 0 }}>
           {sidebarItem("All Events", projectEvents.length, streamFilter.type === "all", () => setStreamFilter({ type: "all" }), "#3b82f6")}
@@ -438,8 +459,78 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
           </div>
         </div>
       </div>
+      )}
 
       <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+    </div>
+  );
+}
+
+function ConfigView({ config }: { config: ProjectConfig }) {
+  const agentsByName = new Map(config.agents.map((a) => [a.name, a]));
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+        <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Workflows ({config.workflows.length})</h3>
+        {config.workflows.map((wf) => (
+          <div key={wf.id} style={{ marginBottom: 10, padding: 8, background: "#0a0a1a", borderRadius: 6, borderLeft: "3px solid #a78bfa" }}>
+            <div style={{ fontWeight: 600, fontSize: 12, color: "#a78bfa", marginBottom: 4 }}>{wf.id}</div>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {wf.phases.map((pid, i) => {
+                const phase = config.phases.find((p) => p.id === pid);
+                const agent = phase?.agent ? agentsByName.get(phase.agent) : null;
+                return (
+                  <span key={i} style={{
+                    fontSize: 9, padding: "2px 6px", borderRadius: 3,
+                    background: phase?.mode === "command" ? "#1a2a1a" : "#1a1a2e",
+                    color: phase?.mode === "command" ? "#22c55e" : "#38bdf8",
+                    border: `1px solid ${phase?.mode === "command" ? "#22c55e30" : "#38bdf830"}`,
+                  }}>
+                    {pid}{agent ? ` (${agent.model.replace("kimi-code/", "")})` : ""}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Agents ({config.agents.length})</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+            {config.agents.map((a) => (
+              <div key={a.name} style={{ fontSize: 10, padding: "4px 6px", background: "#0a0a1a", borderRadius: 4, display: "flex", justifyContent: "space-between", gap: 4 }}>
+                <span style={{ color: "#38bdf8", fontWeight: 600 }}>{a.name}</span>
+                <span style={{ color: "#666" }}>{a.model.replace("kimi-code/", "")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Schedules ({config.schedules.length})</h3>
+          {config.schedules.map((s) => (
+            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, padding: "3px 0", borderBottom: "1px solid #1a1a2e" }}>
+              <span style={{ color: "#a78bfa", fontWeight: 600 }}>{s.id}</span>
+              <span style={{ color: "#555", fontFamily: "'JetBrains Mono', monospace" }}>{s.cron}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+          <h3 style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Phases ({config.phases.length})</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+            {config.phases.map((ph) => (
+              <div key={ph.id} style={{ fontSize: 10, padding: "3px 6px", background: "#0a0a1a", borderRadius: 4, display: "flex", justifyContent: "space-between", gap: 4 }}>
+                <span style={{ color: ph.mode === "command" ? "#22c55e" : "#38bdf8" }}>{ph.id}</span>
+                <span style={{ color: "#444" }}>{ph.mode === "command" ? (ph.command || "cmd") : (ph.agent || "agent")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

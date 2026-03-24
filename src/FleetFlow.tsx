@@ -1,4 +1,5 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ReactFlow,
   Background,
@@ -11,7 +12,7 @@ import "@xyflow/react/dist/style.css";
 import { ProjectNode } from "./ProjectNode";
 import { WorkflowNode } from "./WorkflowNode";
 import { PhaseNode } from "./PhaseNode";
-import type { DaemonHealth, StreamEvent } from "./types";
+import type { DaemonHealth, StreamEvent, Project, ProjectConfig } from "./types";
 
 const nodeTypes = {
   project: ProjectNode,
@@ -28,157 +29,184 @@ const edgeDefaults = {
 interface Props {
   health: DaemonHealth[];
   events: StreamEvent[];
+  projects: Project[];
 }
 
-interface ActiveWorkflow {
-  project: string;
-  workflowRef: string;
-  currentPhase: string | null;
-  status: "running" | "completed" | "failed";
-  phaseIndex?: string;
-}
+export function FleetFlow({ health, events, projects }: Props) {
+  const [configs, setConfigs] = useState<Record<string, ProjectConfig>>({});
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
 
-function buildActiveWorkflows(events: StreamEvent[]): ActiveWorkflow[] {
-  const workflows = new Map<string, ActiveWorkflow>();
+  useEffect(() => {
+    projects.forEach((p) => {
+      invoke<ProjectConfig>("get_project_config", { projectRoot: p.root })
+        .then((cfg) => setConfigs((prev) => ({ ...prev, [p.root]: cfg })))
+        .catch(() => {});
+    });
+  }, [projects]);
 
-  for (const e of events) {
-    const wfRef = (e.meta as Record<string, unknown>)?.workflow_ref as string | undefined;
-    const key = `${e.project}:${wfRef || e.cat}`;
-
-    if (e.cat === "workflow.start" && wfRef) {
-      workflows.set(key, {
-        project: e.project,
-        workflowRef: wfRef,
-        currentPhase: null,
-        status: "running",
-      });
-    } else if (e.cat === "phase.start" && wfRef) {
-      const existing = workflows.get(key);
-      if (existing) {
-        const phaseMatch = e.msg.match(/^(\S+)\s*\((\d+\/\d+)\)/);
-        existing.currentPhase = phaseMatch ? phaseMatch[1] : e.msg;
-        existing.phaseIndex = phaseMatch ? phaseMatch[2] : undefined;
-      } else {
-        workflows.set(key, {
-          project: e.project,
-          workflowRef: wfRef,
-          currentPhase: e.msg.split(" ")[0],
-          status: "running",
-        });
-      }
-    } else if (e.cat === "workflow.complete" && wfRef) {
-      const existing = workflows.get(key);
-      if (existing) {
-        existing.status = e.level === "error" ? "failed" : "completed";
+  const activeWorkflows = useMemo(() => {
+    const wfs = new Map<string, { project: string; workflowRef: string; currentPhase: string | null; status: string }>();
+    for (const e of events) {
+      const wfRef = e.workflow_ref;
+      if (!wfRef) continue;
+      const key = `${e.project}:${wfRef}`;
+      if (e.cat === "workflow.start") {
+        wfs.set(key, { project: e.project, workflowRef: wfRef, currentPhase: null, status: "running" });
+      } else if (e.cat === "phase.start") {
+        const existing = wfs.get(key);
+        if (existing) existing.currentPhase = e.phase_id || e.msg.split(" ")[0];
+      } else if (e.cat === "workflow.complete") {
+        wfs.delete(key);
       }
     }
-  }
+    return Array.from(wfs.values());
+  }, [events]);
 
-  return Array.from(workflows.values()).filter((w) => w.status === "running");
-}
-
-export function FleetFlow({ health, events }: Props) {
   const { nodes, edges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
-    const activeWorkflows = buildActiveWorkflows(events);
 
-    const projectSpacing = 320;
-    const wfXOffset = 300;
-    const phaseXOffset = 280;
+    const visibleProjects = selectedProject
+      ? projects.filter((p) => p.root === selectedProject)
+      : projects;
 
-    health.forEach((h, i) => {
-      const projectY = i * projectSpacing;
+    let yOffset = 0;
+
+    visibleProjects.forEach((proj) => {
+      const h = health.find((h) => h.root === proj.root);
+      const cfg = configs[proj.root];
+      const projId = `p-${proj.root}`;
 
       nodes.push({
-        id: `p-${h.project}`,
+        id: projId,
         type: "project",
-        position: { x: 50, y: projectY },
+        position: { x: 0, y: yOffset },
         data: {
-          health: h,
-          events: events.filter((e) => e.project === h.project).slice(-3),
+          health: h || { project: proj.name, root: proj.root, status: "offline", active_agents: 0, pool_size: 0, queued_tasks: 0, daemon_pid: null, pool_utilization_percent: 0, healthy: false },
+          events: events.filter((e) => e.project === proj.name).slice(-3),
         },
       });
 
-      const projectWorkflows = activeWorkflows.filter(
-        (w) => w.project === h.project
-      );
+      if (!cfg) {
+        yOffset += 200;
+        return;
+      }
 
-      projectWorkflows.forEach((wf, wi) => {
-        const wfId = `wf-${h.project}-${wf.workflowRef}-${wi}`;
-        const wfY = projectY + wi * 80 - ((projectWorkflows.length - 1) * 40);
+      const scheduleWorkflows = new Set(cfg.schedules.map((s) => s.workflow_ref));
+      const wfY = new Map<string, number>();
+
+      cfg.workflows.forEach((wf, wi) => {
+        const wfId = `wf-${proj.root}-${wf.id}`;
+        const y = yOffset + wi * 60;
+        wfY.set(wf.id, y);
+
+        const isActive = activeWorkflows.some((aw) => aw.project === proj.name && aw.workflowRef === wf.id);
+        const activePhase = activeWorkflows.find((aw) => aw.project === proj.name && aw.workflowRef === wf.id)?.currentPhase;
+        const isScheduled = scheduleWorkflows.has(wf.id);
+        const schedule = cfg.schedules.find((s) => s.workflow_ref === wf.id);
 
         nodes.push({
           id: wfId,
           type: "workflow",
-          position: { x: 50 + wfXOffset, y: wfY },
-          data: { workflow: wf },
+          position: { x: 300, y },
+          data: {
+            workflow: {
+              project: proj.name,
+              workflowRef: wf.id,
+              currentPhase: activePhase || null,
+              status: isActive ? "running" : "idle",
+              phaseCount: wf.phases.length,
+              cron: schedule?.cron,
+              isScheduled,
+            },
+          },
         });
 
-        edges.push({
-          id: `e-${h.project}-${wfId}`,
-          source: `p-${h.project}`,
-          target: wfId,
-          ...edgeDefaults,
-        });
+        edges.push({ id: `e-${projId}-${wfId}`, source: projId, target: wfId, ...edgeDefaults });
 
-        if (wf.currentPhase) {
-          const phaseId = `ph-${h.project}-${wf.workflowRef}-${wf.currentPhase}`;
+        wf.phases.forEach((pid, pi) => {
+          const phase = cfg.phases.find((p) => p.id === pid);
+          const phaseId = `ph-${proj.root}-${wf.id}-${pid}-${pi}`;
+          const phaseY = y + pi * 45;
+
+          const isCurrentPhase = activePhase === pid && isActive;
 
           nodes.push({
             id: phaseId,
             type: "phase",
-            position: { x: 50 + wfXOffset + phaseXOffset, y: wfY },
+            position: { x: 580, y: phaseY },
             data: {
-              phase: wf.currentPhase,
-              index: wf.phaseIndex,
-              workflowRef: wf.workflowRef,
+              phase: pid,
+              index: `${pi + 1}/${wf.phases.length}`,
+              workflowRef: wf.id,
+              mode: phase?.mode || "agent",
+              agent: phase?.agent,
+              command: phase?.command,
+              model: phase?.agent ? cfg.agents.find((a) => a.name === phase.agent)?.model : undefined,
+              isActive: isCurrentPhase,
             },
           });
 
-          edges.push({
-            id: `e-${wfId}-${phaseId}`,
-            source: wfId,
-            target: phaseId,
-            ...edgeDefaults,
-          });
-        }
+          edges.push({ id: `e-${wfId}-${phaseId}`, source: wfId, target: phaseId, ...edgeDefaults, animated: isCurrentPhase });
+
+          if (pi > 0) {
+            const prevPhaseId = `ph-${proj.root}-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`;
+            edges.push({
+              id: `e-chain-${phaseId}`,
+              source: prevPhaseId,
+              target: phaseId,
+              style: { stroke: "#222", strokeWidth: 1, strokeDasharray: "4 4" },
+              markerEnd: { type: MarkerType.ArrowClosed, color: "#333", width: 8, height: 8 },
+            });
+          }
+        });
       });
+
+      const maxWfPhases = Math.max(...cfg.workflows.map((wf) => wf.phases.length), 1);
+      yOffset += Math.max(cfg.workflows.length * 60, maxWfPhases * 45) + 80;
     });
 
     return { nodes, edges };
-  }, [health, events]);
-
-  if (health.length === 0) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "calc(100vh - 60px)",
-          color: "#666",
-        }}
-      >
-        Loading fleet data...
-      </div>
-    );
-  }
+  }, [health, events, projects, configs, selectedProject, activeWorkflows]);
 
   return (
-    <div style={{ width: "100vw", height: "calc(100vh - 60px)" }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.3 }}
-        proOptions={{ hideAttribution: true }}
-        defaultEdgeOptions={edgeDefaults}
-      >
-        <Background color="#222" gap={24} />
-        <Controls />
-      </ReactFlow>
+    <div style={{ width: "100%", height: "calc(100vh - 60px)", display: "flex" }}>
+      <div style={{ width: 140, background: "#0a0a1a", borderRight: "1px solid #1a1a2e", padding: 8, overflow: "auto", flexShrink: 0 }}>
+        <div
+          onClick={() => setSelectedProject(null)}
+          style={{
+            fontSize: 10, padding: "4px 6px", borderRadius: 4, cursor: "pointer", marginBottom: 4,
+            background: !selectedProject ? "#1a1a3e" : "transparent", color: !selectedProject ? "#fff" : "#888",
+          }}
+        >All Projects</div>
+        {projects.map((p) => (
+          <div
+            key={p.root}
+            onClick={() => setSelectedProject(p.root)}
+            style={{
+              fontSize: 10, padding: "4px 6px", borderRadius: 4, cursor: "pointer",
+              background: selectedProject === p.root ? "#1a1a3e" : "transparent",
+              color: selectedProject === p.root ? "#fff" : "#888",
+            }}
+          >
+            {p.name}
+          </div>
+        ))}
+      </div>
+      <div style={{ flex: 1 }}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.3 }}
+          proOptions={{ hideAttribution: true }}
+          defaultEdgeOptions={edgeDefaults}
+        >
+          <Background color="#222" gap={24} />
+          <Controls />
+        </ReactFlow>
+      </div>
     </div>
   );
 }

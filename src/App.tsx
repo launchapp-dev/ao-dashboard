@@ -146,7 +146,7 @@ function App() {
         ) : activeTab === "overview" ? (
           <FleetOverview projects={fleet} events={events} />
         ) : activeTab === "flow" ? (
-          <FleetFlow health={health} events={events} />
+          <FleetFlow health={health} events={events} projects={projects} />
         ) : (
           <EventStream events={events} />
         )}
