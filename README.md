@@ -20,6 +20,14 @@
 
 <br/>
 
+<div align="center">
+
+https://github.com/launchapp-dev/ao-dashboard/raw/master/demo.mp4
+
+</div>
+
+<br/>
+
 ## What is AO Dashboard?
 
 A desktop app that gives you a god's-eye view of your [AO](https://github.com/launchapp-dev/ao) fleet. See every daemon, every workflow, every agent — streaming in real time.
