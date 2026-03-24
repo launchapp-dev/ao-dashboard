@@ -98,6 +98,19 @@ export interface ScheduleConfig {
   enabled: boolean;
 }
 
+export interface TaskInfo {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+}
+
+export interface CommitInfo {
+  hash: string;
+  message: string;
+  date: string;
+}
+
 export interface ProjectConfig {
   project: string;
   root: string;

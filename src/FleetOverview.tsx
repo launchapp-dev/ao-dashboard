@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import type { FleetProject, StreamEvent, ProjectConfig } from "./types";
+import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo } from "./types";
 
 const STATUS_COLORS: Record<string, string> = {
   running: "#22c55e",
@@ -220,8 +220,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const [streamFilter, setStreamFilter] = useState<{ type: "all" | "workflow" | "run"; value?: string; label?: string }>({ type: "all" });
   const [levelFilter, setLevelFilter] = useState("all");
   const [textFilter, setTextFilter] = useState("");
-  const [viewMode, setViewMode] = useState<"stream" | "config">("stream");
+  const [viewMode, setViewMode] = useState<"stream" | "config" | "tasks" | "commits">("stream");
   const [config, setConfig] = useState<ProjectConfig | null>(null);
+  const [taskList, setTaskList] = useState<TaskInfo[]>([]);
+  const [commits, setCommits] = useState<CommitInfo[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -229,6 +231,8 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
 
   useEffect(() => {
     invoke<ProjectConfig>("get_project_config", { projectRoot: p.root }).then(setConfig).catch(() => {});
+    invoke<TaskInfo[]>("get_task_list", { projectRoot: p.root }).then(setTaskList).catch(() => {});
+    invoke<CommitInfo[]>("get_recent_commits", { projectRoot: p.root }).then(setCommits).catch(() => {});
   }, [p.root]);
 
   const workflowRefs = new Map<string, { count: number; active: boolean }>();
@@ -333,10 +337,22 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
           background: viewMode === "config" ? "#1a1a3e" : "transparent", border: "1px solid #333",
           color: viewMode === "config" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
         }}>Config</button>
+        <button onClick={() => setViewMode("tasks")} style={{
+          background: viewMode === "tasks" ? "#1a1a3e" : "transparent", border: "1px solid #333",
+          color: viewMode === "tasks" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
+        }}>Tasks{taskList.length > 0 ? ` (${taskList.length})` : ""}</button>
+        <button onClick={() => setViewMode("commits")} style={{
+          background: viewMode === "commits" ? "#1a1a3e" : "transparent", border: "1px solid #333",
+          color: viewMode === "commits" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
+        }}>Commits</button>
       </div>
 
       {viewMode === "config" && config ? (
         <ConfigView config={config} />
+      ) : viewMode === "tasks" ? (
+        <TasksView tasks={taskList} />
+      ) : viewMode === "commits" ? (
+        <CommitsView commits={commits} />
       ) : (
       <div style={{ flex: 1, display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 10, padding: "0 20px 12px", minHeight: 0, overflow: "hidden" }}>
         <div style={{ background: "#111128", borderRadius: 10, padding: 10, overflow: "auto", minWidth: 0 }}>
@@ -462,6 +478,101 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
       )}
 
       <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+    </div>
+  );
+}
+
+const PRIORITY_COLORS: Record<string, string> = {
+  critical: "#ef4444",
+  high: "#f97316",
+  medium: "#eab308",
+  low: "#6b7280",
+};
+
+const TASK_STATUS_COLORS: Record<string, string> = {
+  done: "#22c55e",
+  ready: "#3b82f6",
+  "in-progress": "#a78bfa",
+  in_progress: "#a78bfa",
+  blocked: "#eab308",
+  backlog: "#6b7280",
+  cancelled: "#ef4444",
+  "on-hold": "#f97316",
+  on_hold: "#f97316",
+};
+
+function TasksView({ tasks }: { tasks: TaskInfo[] }) {
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const statuses = new Map<string, number>();
+  tasks.forEach((t) => statuses.set(t.status, (statuses.get(t.status) || 0) + 1));
+
+  const filtered = statusFilter === "all" ? tasks : tasks.filter((t) => t.status === statusFilter);
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <span
+          onClick={() => setStatusFilter("all")}
+          style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer", background: statusFilter === "all" ? "#1a1a3e" : "#111128", color: statusFilter === "all" ? "#fff" : "#888" }}
+        >All ({tasks.length})</span>
+        {[...statuses].sort((a, b) => b[1] - a[1]).map(([status, count]) => (
+          <span
+            key={status}
+            onClick={() => setStatusFilter(statusFilter === status ? "all" : status)}
+            style={{
+              fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+              background: statusFilter === status ? "#1a1a3e" : "#111128",
+              color: TASK_STATUS_COLORS[status] || "#888",
+              border: `1px solid ${statusFilter === status ? (TASK_STATUS_COLORS[status] || "#333") : "#222"}`,
+            }}
+          >{status} ({count})</span>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {filtered.map((t) => (
+          <div key={t.id} style={{
+            display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+            background: "#111128", borderRadius: 6,
+            borderLeft: `3px solid ${TASK_STATUS_COLORS[t.status] || "#333"}`,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#555", minWidth: 65, fontFamily: "'JetBrains Mono', monospace" }}>{t.id}</span>
+            <span style={{
+              fontSize: 9, padding: "2px 6px", borderRadius: 3, fontWeight: 600, minWidth: 60, textAlign: "center",
+              background: `${TASK_STATUS_COLORS[t.status] || "#333"}20`,
+              color: TASK_STATUS_COLORS[t.status] || "#888",
+            }}>{t.status}</span>
+            <span style={{
+              fontSize: 9, padding: "2px 5px", borderRadius: 3,
+              color: PRIORITY_COLORS[t.priority] || "#666",
+              background: `${PRIORITY_COLORS[t.priority] || "#333"}15`,
+            }}>{t.priority}</span>
+            <span style={{ fontSize: 11, color: "#ccc", flex: 1 }}>{t.title}</span>
+          </div>
+        ))}
+        {filtered.length === 0 && <div style={{ color: "#444", textAlign: "center", padding: 20, fontSize: 12 }}>No tasks</div>}
+      </div>
+    </div>
+  );
+}
+
+function CommitsView({ commits }: { commits: CommitInfo[] }) {
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px" }}>
+      <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+        {commits.map((c, i) => (
+          <div key={i} style={{
+            display: "flex", gap: 10, padding: "5px 0", borderBottom: "1px solid #1a1a2e",
+            fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            <span style={{ color: "#eab308", minWidth: 60, flexShrink: 0 }}>{c.hash}</span>
+            <span style={{ color: "#888", minWidth: 80, flexShrink: 0, fontSize: 9 }}>{c.date.slice(0, 10)}</span>
+            <span style={{ color: "#ccc", flex: 1 }}>{c.message}</span>
+          </div>
+        ))}
+        {commits.length === 0 && <div style={{ color: "#444", textAlign: "center", padding: 20, fontSize: 12 }}>No commits</div>}
+      </div>
     </div>
   );
 }

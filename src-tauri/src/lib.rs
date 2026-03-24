@@ -685,6 +685,56 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
     })
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TaskInfo {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub priority: String,
+}
+
+#[tauri::command]
+async fn get_task_list(project_root: String) -> Result<Vec<TaskInfo>, String> {
+    let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 10).await?;
+    let tasks: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
+    Ok(tasks.iter().map(|t| TaskInfo {
+        id: t["id"].as_str().unwrap_or("").to_string(),
+        title: t["title"].as_str().unwrap_or("").to_string(),
+        status: t["status"].as_str().unwrap_or("").to_string(),
+        priority: t["priority"].as_str().unwrap_or("medium").to_string(),
+    }).collect())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CommitInfo {
+    pub hash: String,
+    pub message: String,
+    pub date: String,
+}
+
+#[tauri::command]
+async fn get_recent_commits(project_root: String) -> Result<Vec<CommitInfo>, String> {
+    let output = Command::new("git")
+        .args(["log", "--oneline", "--no-merges", "-30", "--format=%h\t%s\t%ci"])
+        .current_dir(&project_root)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().filter_map(|line| {
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        if parts.len() >= 2 {
+            Some(CommitInfo {
+                hash: parts[0].to_string(),
+                message: parts[1].to_string(),
+                date: parts.get(2).unwrap_or(&"").to_string(),
+            })
+        } else {
+            None
+        }
+    }).collect())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -702,6 +752,8 @@ pub fn run() {
             get_fleet_data,
             start_filtered_stream,
             get_project_config,
+            get_task_list,
+            get_recent_commits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
