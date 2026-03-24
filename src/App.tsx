@@ -79,7 +79,7 @@ function App() {
     if (projects.length > 0) {
       refreshHealth();
       refreshDetails();
-      const healthInterval = setInterval(refreshHealth, 10000);
+      const healthInterval = setInterval(refreshHealth, 30000);
       const detailInterval = setInterval(refreshDetails, 30000);
       return () => { clearInterval(healthInterval); clearInterval(detailInterval); };
     }

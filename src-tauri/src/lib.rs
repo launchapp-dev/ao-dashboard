@@ -162,7 +162,7 @@ async fn get_all_health(projects: Vec<Project>) -> Result<Vec<DaemonHealth>, Str
         let root = project.root.clone();
         let name = project.name.clone();
         handles.push(tokio::spawn(async move {
-            match run_ao_cmd(&["daemon", "health", "--project-root", &root], 15).await {
+            match run_ao_cmd(&["daemon", "health", "--project-root", &root], 30).await {
                 Ok(stdout) => {
                     let mut h = parse_health(&root, &stdout);
                     h.project = name;
