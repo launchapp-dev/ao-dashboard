@@ -22,7 +22,7 @@
 
 <div align="center">
 
-https://github.com/launchapp-dev/ao-dashboard/raw/master/demo.mp4
+<video src="https://github.com/launchapp-dev/ao-dashboard/raw/master/demo.mp4" width="800" controls autoplay muted loop></video>
 
 </div>
 
