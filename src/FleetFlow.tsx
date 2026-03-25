@@ -161,8 +161,8 @@ export function FleetFlow({ health, events, projects }: Props) {
       data: { label: "Pipelines", count: taskWfs.length, color: "#3b82f6", icon: "⚡", expanded: isPipe, onClick: () => toggleGroup("pipe") } });
 
     // Edges from project to groups
-    edges.push(e("ep-mcp", "proj", "g-mcp", false, "#22c55e40"));
-    edges.push(e("ep-agent", "proj", "g-agent", false, "#a78bfa40"));
+    edges.push(e("ep-mcp", "g-mcp", "proj", false, "#22c55e40"));
+    edges.push(e("ep-agent", "g-agent", "proj", false, "#a78bfa40"));
     edges.push(e("ep-sched", "proj", "g-sched", false, "#eab30840"));
     edges.push(e("ep-pipe", "proj", "g-pipe", false, "#3b82f640"));
 
