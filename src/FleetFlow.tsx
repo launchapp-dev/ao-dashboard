@@ -1,12 +1,8 @@
 import { useMemo, useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  ReactFlow,
-  Background,
-  Controls,
-  type Node,
-  type Edge,
-  MarkerType,
+  ReactFlow, Background, Controls,
+  type Node, type Edge, MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { cn } from "@/lib/utils";
@@ -14,14 +10,20 @@ import { ProjectNode } from "./ProjectNode";
 import { WorkflowNode } from "./WorkflowNode";
 import { PhaseNode } from "./PhaseNode";
 import { ScheduleNode } from "./ScheduleNode";
+import { GroupNode } from "./GroupNode";
+import { AgentNode } from "./AgentNode";
 import type { DaemonHealth, StreamEvent, Project, ProjectConfig } from "./types";
 
-const nodeTypes = { project: ProjectNode, workflow: WorkflowNode, phase: PhaseNode, schedule: ScheduleNode };
-
-const edgeDefaults = {
-  style: { stroke: "#333", strokeWidth: 1.5 },
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#444", width: 12, height: 12 },
+const nodeTypes = {
+  project: ProjectNode, workflow: WorkflowNode, phase: PhaseNode,
+  schedule: ScheduleNode, group: GroupNode, agent: AgentNode,
 };
+
+const edge = (id: string, source: string, target: string, animated = false, color = "#333"): Edge => ({
+  id, source, target, animated,
+  style: { stroke: color, strokeWidth: 1.5 },
+  markerEnd: { type: MarkerType.ArrowClosed, color: color === "#333" ? "#444" : color, width: 10, height: 10 },
+});
 
 function cronToHuman(cron: string): string {
   const p = cron.split(" ");
@@ -52,14 +54,13 @@ export function FleetFlow({ health, events, projects }: Props) {
   }, [projects, selectedProject]);
 
   const activeWorkflows = useMemo(() => {
-    const wfs = new Map<string, { project: string; workflowRef: string; currentPhase: string | null; model?: string }>();
+    const wfs = new Map<string, { project: string; workflowRef: string; currentPhase: string | null }>();
     for (const e of events) {
       const wfRef = e.workflow_ref;
       if (!wfRef) continue;
       const key = `${e.project}:${wfRef}`;
       if (e.cat === "workflow.start") wfs.set(key, { project: e.project, workflowRef: wfRef, currentPhase: null });
       else if (e.cat === "phase.start") { const ex = wfs.get(key); if (ex) ex.currentPhase = e.phase_id || e.msg.split(" ")[0]; }
-      else if (e.cat === "phase.complete" && e.model) { const ex = wfs.get(key); if (ex) ex.model = e.model; }
       else if (e.cat === "workflow.complete") wfs.delete(key);
     }
     return Array.from(wfs.values());
@@ -73,102 +74,118 @@ export function FleetFlow({ health, events, projects }: Props) {
 
     const h = health.find((h) => h.root === proj.root);
     const cfg = configs[proj.root];
-
     if (!cfg) return { nodes, edges };
 
-    const ROW_H = 90;
-    const SCHED_X = 0;
-    const WF_X = 220;
-    const PHASE_START_X = 460;
-    const PHASE_W = 200;
+    const ROW = 85;
+    const COL_PROJECT = 0;
+    const COL_GROUP = 280;
+    const COL_SCHED = 500;
+    const COL_WF = 700;
+    const COL_PHASE = 930;
+    const PHASE_W = 195;
+
     const scheduledWfIds = new Set(cfg.schedules.map((s) => s.workflow_ref));
     const scheduledWfs = cfg.workflows.filter((wf) => scheduledWfIds.has(wf.id));
     const taskWfs = cfg.workflows.filter((wf) => !scheduledWfIds.has(wf.id));
 
-    let row = 0;
-
-    const projId = "proj";
-    const projY = -150;
+    const schedGroupY = 0;
+    const pipeGroupY = (scheduledWfs.length + 1.5) * ROW;
+    const agentGroupY = (scheduledWfs.length + taskWfs.length + 3) * ROW;
+    const projY = pipeGroupY - ROW;
 
     nodes.push({
-      id: projId, type: "project", position: { x: WF_X, y: projY },
+      id: "proj", type: "project", position: { x: COL_PROJECT, y: projY },
       data: {
         health: h || { project: proj.name, root: proj.root, status: "offline", active_agents: 0, pool_size: 0, queued_tasks: 0, daemon_pid: null, pool_utilization_percent: 0, healthy: false },
         events: events.filter((e) => e.project === proj.name).slice(-3),
       },
     });
 
-    const addGroup = (label: string, workflows: typeof cfg.workflows, color: string) => {
-      if (workflows.length === 0) return;
+    nodes.push({ id: "g-sched", type: "group", position: { x: COL_GROUP, y: schedGroupY + (scheduledWfs.length * ROW) / 2 - 20 },
+      data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱" } });
+    nodes.push({ id: "g-pipe", type: "group", position: { x: COL_GROUP, y: pipeGroupY + (taskWfs.length * ROW) / 2 - 20 },
+      data: { label: "Pipelines", count: taskWfs.length, color: "#3b82f6", icon: "⚡" } });
+    nodes.push({ id: "g-agent", type: "group", position: { x: COL_GROUP, y: agentGroupY + (cfg.agents.length * ROW) / 2 - 20 },
+      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖" } });
 
-      const labelY = row * ROW_H;
-      nodes.push({
-        id: `lbl-${label}`, type: "default", position: { x: WF_X - 10, y: labelY - 18 },
-        data: { label }, selectable: false, draggable: false,
-        style: { background: "transparent", border: "none", color, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, padding: 0, width: "auto" },
+    edges.push(edge("e-proj-sched", "proj", "g-sched", false, "#eab30860"));
+    edges.push(edge("e-proj-pipe", "proj", "g-pipe", false, "#3b82f660"));
+    edges.push(edge("e-proj-agent", "proj", "g-agent", false, "#a78bfa60"));
+
+    scheduledWfs.forEach((wf, i) => {
+      const y = schedGroupY + i * ROW;
+      const wfId = `wf-${wf.id}`;
+      const isActive = activeWorkflows.some((aw) => aw.project === proj.name && aw.workflowRef === wf.id);
+      const activePhase = activeWorkflows.find((aw) => aw.project === proj.name && aw.workflowRef === wf.id)?.currentPhase;
+      const schedule = cfg.schedules.find((s) => s.workflow_ref === wf.id);
+
+      if (schedule) {
+        const schedId = `sched-${schedule.id}`;
+        nodes.push({ id: schedId, type: "schedule", position: { x: COL_SCHED, y },
+          data: { id: schedule.id, cron: schedule.cron, humanCron: cronToHuman(schedule.cron), enabled: schedule.enabled } });
+        edges.push(edge(`e-gs-${schedId}`, "g-sched", schedId, false, "#eab30840"));
+        edges.push(edge(`e-s-${schedId}`, schedId, wfId, isActive, isActive ? "#eab308" : "#eab30830"));
+      }
+
+      nodes.push({ id: wfId, type: "workflow", position: { x: COL_WF, y },
+        data: { workflow: { project: proj.name, workflowRef: wf.id, currentPhase: activePhase || null, status: isActive ? "running" : "idle", phaseCount: wf.phases.length, cron: schedule?.cron, isScheduled: true } } });
+
+      wf.phases.forEach((pid, pi) => {
+        const phase = cfg.phases.find((p) => p.id === pid);
+        const phaseId = `ph-${wf.id}-${pid}-${pi}`;
+        const agentCfg = phase?.agent ? cfg.agents.find((a) => a.name === phase.agent) : null;
+        const isCurrentPhase = activePhase === pid && isActive;
+
+        nodes.push({ id: phaseId, type: "phase", position: { x: COL_PHASE + pi * PHASE_W, y },
+          data: { phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id, mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command, model: agentCfg?.model, isActive: isCurrentPhase } });
+
+        if (pi === 0) edges.push(edge(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive));
+        else edges.push(edge(`e-c-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase));
       });
+    });
 
-      workflows.forEach((wf) => {
-        const y = row * ROW_H;
-        const wfId = `wf-${wf.id}`;
-        const isActive = activeWorkflows.some((aw) => aw.project === proj.name && aw.workflowRef === wf.id);
-        const activePhase = activeWorkflows.find((aw) => aw.project === proj.name && aw.workflowRef === wf.id)?.currentPhase;
-        const schedule = cfg.schedules.find((s) => s.workflow_ref === wf.id);
+    taskWfs.forEach((wf, i) => {
+      const y = pipeGroupY + i * ROW;
+      const wfId = `wf-${wf.id}`;
+      const isActive = activeWorkflows.some((aw) => aw.project === proj.name && aw.workflowRef === wf.id);
+      const activePhase = activeWorkflows.find((aw) => aw.project === proj.name && aw.workflowRef === wf.id)?.currentPhase;
 
-        if (schedule) {
-          const schedId = `sched-${schedule.id}`;
-          nodes.push({
-            id: schedId, type: "schedule", position: { x: SCHED_X, y },
-            data: { id: schedule.id, cron: schedule.cron, humanCron: cronToHuman(schedule.cron), enabled: schedule.enabled },
-          });
-          edges.push({ id: `e-s-${schedId}`, source: schedId, target: wfId, ...edgeDefaults, animated: isActive, style: { stroke: isActive ? "#eab308" : "#eab30830", strokeWidth: 1.5 } });
-        }
+      nodes.push({ id: wfId, type: "workflow", position: { x: COL_WF, y },
+        data: { workflow: { project: proj.name, workflowRef: wf.id, currentPhase: activePhase || null, status: isActive ? "running" : "idle", phaseCount: wf.phases.length, isScheduled: false } } });
+      edges.push(edge(`e-gp-${wfId}`, "g-pipe", wfId, isActive, isActive ? "#3b82f6" : "#3b82f630"));
 
-        nodes.push({
-          id: wfId, type: "workflow", position: { x: WF_X, y },
-          data: {
-            workflow: {
-              project: proj.name, workflowRef: wf.id, currentPhase: activePhase || null,
-              status: isActive ? "running" : "idle", phaseCount: wf.phases.length,
-              cron: schedule?.cron, isScheduled: !!schedule,
-            },
-          },
-        });
+      wf.phases.forEach((pid, pi) => {
+        const phase = cfg.phases.find((p) => p.id === pid);
+        const phaseId = `ph-${wf.id}-${pid}-${pi}`;
+        const agentCfg = phase?.agent ? cfg.agents.find((a) => a.name === phase.agent) : null;
+        const isCurrentPhase = activePhase === pid && isActive;
 
-        edges.push({ id: `e-proj-${wfId}`, source: projId, target: wfId, ...edgeDefaults, animated: isActive });
+        nodes.push({ id: phaseId, type: "phase", position: { x: COL_PHASE + pi * PHASE_W, y },
+          data: { phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id, mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command, model: agentCfg?.model, isActive: isCurrentPhase } });
 
-        wf.phases.forEach((pid, pi) => {
-          const phase = cfg.phases.find((p) => p.id === pid);
-          const phaseId = `ph-${wf.id}-${pid}-${pi}`;
-          const phaseX = PHASE_START_X + pi * PHASE_W;
-          const isCurrentPhase = activePhase === pid && isActive;
-          const agentCfg = phase?.agent ? cfg.agents.find((a) => a.name === phase.agent) : null;
-
-          nodes.push({
-            id: phaseId, type: "phase", position: { x: phaseX, y },
-            data: {
-              phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id,
-              mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command,
-              model: agentCfg?.model, isActive: isCurrentPhase,
-            },
-          });
-
-          if (pi === 0) {
-            edges.push({ id: `e-${wfId}-${phaseId}`, source: wfId, target: phaseId, ...edgeDefaults, animated: isActive });
-          } else {
-            const prevId = `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`;
-            edges.push({ id: `e-c-${phaseId}`, source: prevId, target: phaseId, ...edgeDefaults, animated: isCurrentPhase });
-          }
-        });
-
-        row++;
+        if (pi === 0) edges.push(edge(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive));
+        else edges.push(edge(`e-c-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase));
       });
+    });
 
-      row++;
-    };
+    const agentPhaseMap = new Map<string, string[]>();
+    cfg.phases.forEach((ph) => {
+      if (ph.agent) {
+        const list = agentPhaseMap.get(ph.agent) || [];
+        list.push(ph.id);
+        agentPhaseMap.set(ph.agent, list);
+      }
+    });
 
-    addGroup("Scheduled Workflows", scheduledWfs, "#eab308");
-    addGroup("Task Pipelines", taskWfs, "#3b82f6");
+    cfg.agents.forEach((a, i) => {
+      const y = agentGroupY + i * ROW;
+      const agentId = `agent-${a.name}`;
+      const usedIn = agentPhaseMap.get(a.name) || [];
+
+      nodes.push({ id: agentId, type: "agent", position: { x: COL_SCHED, y },
+        data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn } });
+      edges.push(edge(`e-ga-${agentId}`, "g-agent", agentId, false, "#a78bfa30"));
+    });
 
     return { nodes, edges };
   }, [health, events, projects, configs, selectedProject, activeWorkflows]);
@@ -189,46 +206,12 @@ export function FleetFlow({ health, events, projects }: Props) {
             </div>
           );
         })}
-
-        {selectedProject && configs[selectedProject] && (
-          <>
-            <div className="text-[9px] text-muted-foreground/40 uppercase tracking-wide px-1.5 pt-3 pb-1 font-semibold">Models in Use</div>
-            {(() => {
-              const models = new Map<string, number>();
-              const projName = projects.find((p) => p.root === selectedProject)?.name;
-              events.filter((e) => e.project === projName && e.model).forEach((e) => models.set(e.model!, (models.get(e.model!) || 0) + 1));
-              if (models.size === 0) {
-                configs[selectedProject].agents.forEach((a) => models.set(a.model, 0));
-              }
-              return [...models].map(([name, count]) => (
-                <div key={name} className="flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{name.replace("kimi-code/", "").replace("claude-", "")}</span>
-                  {count > 0 && <span className="text-[9px] text-muted-foreground/30">{count}</span>}
-                </div>
-              ));
-            })()}
-
-            <div className="text-[9px] text-muted-foreground/40 uppercase tracking-wide px-1.5 pt-3 pb-1 font-semibold">MCP Servers</div>
-            {(() => {
-              const servers = new Set<string>();
-              configs[selectedProject].agents.forEach((a) => a.mcp_servers.forEach((s) => servers.add(s)));
-              return [...servers].map((s) => (
-                <div key={s} className="px-1.5 py-0.5 text-[10px] text-chart-1 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-chart-1/50 shrink-0" />
-                  {s}
-                </div>
-              ));
-            })()}
-          </>
-        )}
       </div>
       <div className="flex-1">
         <ReactFlow
           nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView
-          fitViewOptions={{ padding: 0.2 }}
+          fitViewOptions={{ padding: 0.15 }}
           proOptions={{ hideAttribution: true }}
-          defaultEdgeOptions={edgeDefaults}
           key={selectedProject}
         >
           <Background color="#222" gap={24} />
