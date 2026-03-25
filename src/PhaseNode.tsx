@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 
@@ -16,11 +15,13 @@ interface Props {
     isActive?: boolean;
     timeout_secs?: number;
     cwd_mode?: string;
+    expanded?: boolean;
+    onToggle?: () => void;
   };
 }
 
 export function PhaseNode({ data }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = data.expanded ?? false;
   const { phase, index, mode, agent, command, model, isActive, directive } = data;
 
   const isCommand = mode === "command";
@@ -28,7 +29,7 @@ export function PhaseNode({ data }: Props) {
 
   return (
     <div
-      onClick={() => setExpanded(!expanded)}
+      onClick={data.onToggle}
       className={cn(
         "rounded-md font-sans text-[11px] cursor-pointer transition-all",
         expanded ? "min-w-[260px] max-w-[320px]" : "min-w-[160px] max-w-[220px]"

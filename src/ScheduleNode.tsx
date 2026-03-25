@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 
@@ -9,15 +8,17 @@ interface Props {
     humanCron: string;
     enabled: boolean;
     workflow_ref?: string;
+    expanded?: boolean;
+    onToggle?: () => void;
   };
 }
 
 export function ScheduleNode({ data }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = data.expanded ?? false;
 
   return (
     <div
-      onClick={() => setExpanded(!expanded)}
+      onClick={data.onToggle}
       className={cn(
         "bg-card border border-chart-4/40 rounded-lg px-3 py-2 font-sans cursor-pointer transition-all",
         expanded ? "min-w-[200px]" : "min-w-[150px]"

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 
@@ -17,11 +16,13 @@ interface Props {
       phases?: string[];
     };
     onClick?: () => void;
+    expanded?: boolean;
+    onToggle?: () => void;
   };
 }
 
 export function WorkflowNode({ data }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = data.expanded ?? false;
   const { workflow: wf, onClick } = data;
 
   const isRunning = wf.status === "running";
@@ -31,7 +32,7 @@ export function WorkflowNode({ data }: Props) {
     <div
       onClick={() => {
         if (onClick && !expanded) onClick();
-        setExpanded(!expanded);
+        data.onToggle?.();
       }}
       className={cn(
         "rounded-lg font-sans cursor-pointer transition-all",

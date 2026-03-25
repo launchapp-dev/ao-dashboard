@@ -42,9 +42,14 @@ export function FleetFlow({ health, events, projects }: Props) {
   const [configs, setConfigs] = useState<Record<string, ProjectConfig>>({});
   const [selectedProject, setSelectedProject] = useState<string | null>(projects[0]?.root || null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["sched", "pipe"]));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   const toggleGroup = (g: string) => {
     setExpandedGroups((prev) => { const n = new Set(prev); n.has(g) ? n.delete(g) : n.add(g); return n; });
+  };
+
+  const toggleNode = (id: string) => {
+    setExpandedNodes((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
   useEffect(() => {
@@ -115,27 +120,51 @@ export function FleetFlow({ health, events, projects }: Props) {
     const COL_PHASE = 1050;
     const PHASE_W = 210;
     const GAP = ROW * 1.2;
+    const EXPANDED_ROW = 280;
 
-    // Count rows per group
-    const mcpRows = isMcp ? mcpServers.size : 0;
-    const agentRows = isAgent ? cfg.agents.length : 0;
-    const schedRows = isSched ? scheduledWfs.length : 0;
-    const pipeRows = isPipe ? taskWfs.length : 0;
+    const rowH = (nodeId: string) => {
+      if (expandedNodes.has(nodeId)) return EXPANDED_ROW;
+      const wfId = nodeId.startsWith("wf-") ? nodeId.replace("wf-", "") : null;
+      if (wfId) {
+        const wf = cfg.workflows.find((w) => w.id === wfId);
+        if (wf?.phases.some((pid, pi) => expandedNodes.has(`ph-${wfId}-${pid}-${pi}`))) return EXPANDED_ROW;
+      }
+      return ROW;
+    };
 
-    // Calculate total height for each side
-    const leftH = Math.max(mcpRows, 1) * ROW + GAP + Math.max(agentRows, 1) * ROW;
-    const rightH = Math.max(schedRows, 1) * ROW + GAP + Math.max(pipeRows, 1) * ROW;
+    // Build cumulative Y positions per group, accounting for expanded nodes
+    const mcpIds = isMcp ? [...mcpServers.keys()].map((n) => `mcp-${n}`) : [];
+    const agentIds = isAgent ? cfg.agents.map((a) => `agent-${a.name}`) : [];
+    const schedWfIds = isSched ? scheduledWfs.map((wf) => `wf-${wf.id}`) : [];
+    const pipeWfIds = isPipe ? taskWfs.map((wf) => `wf-${wf.id}`) : [];
+
+    const cumY = (ids: string[]) => {
+      const positions: number[] = [];
+      let y = 0;
+      for (const id of ids) {
+        positions.push(y);
+        y += rowH(id);
+      }
+      return { positions, totalH: ids.length > 0 ? y : ROW };
+    };
+
+    const mcpLayout = cumY(mcpIds);
+    const agentLayout = cumY(agentIds);
+    const schedLayout = cumY(schedWfIds);
+    const pipeLayout = cumY(pipeWfIds);
+
+    const leftH = mcpLayout.totalH + GAP + agentLayout.totalH;
+    const rightH = schedLayout.totalH + GAP + pipeLayout.totalH;
     const totalH = Math.max(leftH, rightH);
     const mid = totalH / 2;
 
-    // Center each side around the midpoint
     const leftOffset = mid - leftH / 2;
     const rightOffset = mid - rightH / 2;
 
     const mcpStartY = leftOffset;
-    const agentStartY = leftOffset + Math.max(mcpRows, 1) * ROW + GAP;
+    const agentStartY = leftOffset + mcpLayout.totalH + GAP;
     const schedStartY = rightOffset;
-    const pipeStartY = rightOffset + Math.max(schedRows, 1) * ROW + GAP;
+    const pipeStartY = rightOffset + schedLayout.totalH + GAP;
 
     const projY = mid - ROW / 2;
 
@@ -148,16 +177,16 @@ export function FleetFlow({ health, events, projects }: Props) {
       },
     });
 
-    // Group hub Y = center of its children
-    const hubY = (startY: number, rows: number) => startY + Math.max(rows - 1, 0) * ROW / 2;
+    // Group hub Y = center of its children's total height
+    const hubY = (startY: number, layout: { totalH: number }) => startY + layout.totalH / 2 - ROW / 2;
 
-    nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: hubY(mcpStartY, mcpRows) },
+    nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: hubY(mcpStartY, mcpLayout) },
       data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
-    nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: hubY(agentStartY, agentRows) },
+    nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: hubY(agentStartY, agentLayout) },
       data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
-    nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: hubY(schedStartY, schedRows) },
+    nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: hubY(schedStartY, schedLayout) },
       data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
-    nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: hubY(pipeStartY, pipeRows) },
+    nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: hubY(pipeStartY, pipeLayout) },
       data: { label: "Pipelines", count: taskWfs.length, color: "#3b82f6", icon: "⚡", expanded: isPipe, onClick: () => toggleGroup("pipe") } });
 
     // Edges from project to groups
@@ -169,9 +198,9 @@ export function FleetFlow({ health, events, projects }: Props) {
     // MCP SERVERS
     if (isMcp) {
       [...mcpServers].forEach(([name, usedBy], i) => {
-        const y = mcpStartY + i * ROW;
+        const y = mcpStartY + mcpLayout.positions[i];
         const id = `mcp-${name}`;
-        nodes.push({ id, type: "mcp", position: { x: COL_MCP, y }, data: { name, usedBy } });
+        nodes.push({ id, type: "mcp", position: { x: COL_MCP, y }, data: { name, usedBy, expanded: expandedNodes.has(id), onToggle: () => toggleNode(id) } });
         edges.push(e(`eg-${id}`, id, "g-mcp", false, "#22c55e30"));
       });
     }
@@ -179,12 +208,11 @@ export function FleetFlow({ health, events, projects }: Props) {
     // AGENTS
     if (isAgent) {
       cfg.agents.forEach((a, i) => {
-        const y = agentStartY + i * ROW;
+        const y = agentStartY + agentLayout.positions[i];
         const id = `agent-${a.name}`;
         nodes.push({ id, type: "agent", position: { x: COL_AGENT, y },
-          data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn: agentPhaseMap.get(a.name) || [], system_prompt: a.system_prompt } });
+          data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn: agentPhaseMap.get(a.name) || [], system_prompt: a.system_prompt, expanded: expandedNodes.has(id), onToggle: () => toggleNode(id) } });
         edges.push(e(`eg-${id}`, id, "g-agent", false, "#a78bfa30"));
-
       });
     }
 
@@ -206,7 +234,7 @@ export function FleetFlow({ health, events, projects }: Props) {
       }
 
       nodes.push({ id: wfId, type: "workflow", position: { x: COL_WF, y },
-        data: { workflow: { project: proj.name, workflowRef: wf.id, currentPhase: activePhase || null, status: isActive ? "running" : "idle", phaseCount: wf.phases.length, cron: schedule?.cron, isScheduled: !!schedule, name: wf.name, description: wf.description, phases: wf.phases } } });
+        data: { workflow: { project: proj.name, workflowRef: wf.id, currentPhase: activePhase || null, status: isActive ? "running" : "idle", phaseCount: wf.phases.length, cron: schedule?.cron, isScheduled: !!schedule, name: wf.name, description: wf.description, phases: wf.phases }, expanded: expandedNodes.has(wfId), onToggle: () => toggleNode(wfId) } });
 
       wf.phases.forEach((pid, pi) => {
         const phase = cfg.phases.find((p) => p.id === pid);
@@ -215,7 +243,7 @@ export function FleetFlow({ health, events, projects }: Props) {
         const isCurrentPhase = activePhase === pid && isActive;
 
         nodes.push({ id: phaseId, type: "phase", position: { x: COL_PHASE + pi * PHASE_W, y },
-          data: { phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id, mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command, command_args: phase?.command_args, directive: phase?.directive, model: agentCfg?.model, isActive: isCurrentPhase, timeout_secs: phase?.timeout_secs, cwd_mode: phase?.cwd_mode } });
+          data: { phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id, mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command, command_args: phase?.command_args, directive: phase?.directive, model: agentCfg?.model, isActive: isCurrentPhase, timeout_secs: phase?.timeout_secs, cwd_mode: phase?.cwd_mode, expanded: expandedNodes.has(phaseId), onToggle: () => toggleNode(phaseId) } });
 
         if (pi === 0) edges.push(e(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive));
         else edges.push(e(`ec-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase));
@@ -225,16 +253,16 @@ export function FleetFlow({ health, events, projects }: Props) {
 
     // SCHEDULED WORKFLOWS
     if (isSched) {
-      scheduledWfs.forEach((wf, i) => renderWf(wf, schedStartY + i * ROW, "g-sched", "#eab308"));
+      scheduledWfs.forEach((wf, i) => renderWf(wf, schedStartY + schedLayout.positions[i], "g-sched", "#eab308"));
     }
 
     // TASK PIPELINES
     if (isPipe) {
-      taskWfs.forEach((wf, i) => renderWf(wf, pipeStartY + i * ROW, "g-pipe", "#3b82f6"));
+      taskWfs.forEach((wf, i) => renderWf(wf, pipeStartY + pipeLayout.positions[i], "g-pipe", "#3b82f6"));
     }
 
     return { nodes, edges };
-  }, [health, events, projects, configs, selectedProject, activeWorkflows, expandedGroups]);
+  }, [health, events, projects, configs, selectedProject, activeWorkflows, expandedGroups, expandedNodes]);
 
   return (
     <div className="w-full h-[calc(100vh-60px)] flex">

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 
@@ -10,15 +9,17 @@ interface Props {
     mcp_servers: string[];
     usedIn: string[];
     system_prompt?: string;
+    expanded?: boolean;
+    onToggle?: () => void;
   };
 }
 
 export function AgentNode({ data }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = data.expanded ?? false;
 
   return (
     <div
-      onClick={() => setExpanded(!expanded)}
+      onClick={data.onToggle}
       className={cn(
         "bg-card border border-primary/30 rounded-lg px-3 py-2 font-sans cursor-pointer transition-all",
         expanded ? "min-w-[280px] max-w-[400px]" : "min-w-[160px] max-w-[220px]"
