@@ -24,7 +24,7 @@ export function AgentNode({ data }: Props) {
         expanded ? "min-w-[280px] max-w-[400px]" : "min-w-[160px] max-w-[220px]"
       )}
     >
-      <Handle type="target" position={Position.Right} style={{ background: "#3b82f6" }} />
+      <Handle type="target" position={Position.Left} style={{ background: "#3b82f6" }} />
 
       <div className="flex items-center gap-1.5 mb-1">
         <span className="w-2 h-2 rounded-full bg-primary shrink-0" />

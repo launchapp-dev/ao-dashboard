@@ -152,9 +152,9 @@ export function FleetFlow({ health, events, projects }: Props) {
     const centerY = (startY: number, rows: number) => startY + (rows > 0 ? (rows * ROW) / 2 : 0) - 20;
 
     nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: centerY(mcpStartY, mcpRows) },
-      data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp"), side: "left" } });
+      data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
     nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: centerY(agentStartY, agentRows) },
-      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent"), side: "left" } });
+      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
     nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: centerY(schedStartY, schedRows) },
       data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
     nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: centerY(pipeStartY, pipeRows) },
@@ -172,7 +172,7 @@ export function FleetFlow({ health, events, projects }: Props) {
         const y = mcpStartY + i * ROW;
         const id = `mcp-${name}`;
         nodes.push({ id, type: "mcp", position: { x: COL_MCP, y }, data: { name, usedBy } });
-        edges.push(e(`eg-${id}`, "g-mcp", id, false, "#22c55e30"));
+        edges.push(e(`eg-${id}`, id, "g-mcp", false, "#22c55e30"));
       });
     }
 
@@ -183,7 +183,7 @@ export function FleetFlow({ health, events, projects }: Props) {
         const id = `agent-${a.name}`;
         nodes.push({ id, type: "agent", position: { x: COL_AGENT, y },
           data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn: agentPhaseMap.get(a.name) || [], system_prompt: a.system_prompt } });
-        edges.push(e(`eg-${id}`, "g-agent", id, false, "#a78bfa30"));
+        edges.push(e(`eg-${id}`, id, "g-agent", false, "#a78bfa30"));
 
       });
     }
