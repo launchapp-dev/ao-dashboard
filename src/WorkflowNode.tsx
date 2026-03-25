@@ -11,17 +11,19 @@ interface Props {
       cron?: string;
       isScheduled?: boolean;
     };
+    onClick?: () => void;
   };
 }
 
 export function WorkflowNode({ data }: Props) {
-  const { workflow: wf } = data;
+  const { workflow: wf, onClick } = data;
 
   const isRunning = wf.status === "running";
   const color = isRunning ? "#3b82f6" : "#555";
 
   return (
     <div
+      onClick={onClick}
       style={{
         background: isRunning ? "#16162a" : "#111122",
         border: `1.5px solid ${color}`,
@@ -30,6 +32,7 @@ export function WorkflowNode({ data }: Props) {
         minWidth: 180,
         color: "#e0e0e0",
         fontFamily: "system-ui, sans-serif",
+        cursor: onClick ? "pointer" : "default",
       }}
     >
       <Handle type="target" position={Position.Left} style={{ background: color }} />
