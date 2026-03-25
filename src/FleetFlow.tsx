@@ -185,12 +185,6 @@ export function FleetFlow({ health, events, projects }: Props) {
           data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn: agentPhaseMap.get(a.name) || [], system_prompt: a.system_prompt } });
         edges.push(e(`eg-${id}`, "g-agent", id, false, "#a78bfa30"));
 
-        // Connect MCP servers to this agent
-        if (isMcp) {
-          a.mcp_servers.forEach((s) => {
-            edges.push(e(`emcp-${s}-${a.name}`, `mcp-${s}`, id, false, "#22c55e20"));
-          });
-        }
       });
     }
 
@@ -226,10 +220,6 @@ export function FleetFlow({ health, events, projects }: Props) {
         if (pi === 0) edges.push(e(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive));
         else edges.push(e(`ec-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase));
 
-        // Connect agent to phase if agent group is expanded
-        if (isAgent && phase?.agent) {
-          edges.push(e(`ea-${phase.agent}-${phaseId}`, `agent-${phase.agent}`, phaseId, isCurrentPhase, "#a78bfa15"));
-        }
       });
     };
 

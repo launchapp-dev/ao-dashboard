@@ -36,7 +36,7 @@ export function ProjectNode({ data }: Props) {
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
-      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Left} style={{ background: statusColor }} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <span style={{ fontWeight: 700, fontSize: 14 }}>{h.project}</span>
