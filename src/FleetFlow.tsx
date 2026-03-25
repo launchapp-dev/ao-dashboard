@@ -21,7 +21,7 @@ const nodeTypes = {
 };
 
 const e = (id: string, src: string, tgt: string, anim = false, color = "#333"): Edge => ({
-  id, source: src, target: tgt, animated: anim,
+  id, source: src, target: tgt, animated: anim, type: "smoothstep",
   style: { stroke: color, strokeWidth: 1.5 },
   markerEnd: { type: MarkerType.ArrowClosed, color: color === "#333" ? "#444" : color, width: 10, height: 10 },
 });
