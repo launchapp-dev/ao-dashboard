@@ -6,7 +6,7 @@ import { FleetFlow } from "./FleetFlow";
 import { EventStream } from "./EventStream";
 import type { DaemonHealth, StreamEvent, Project, FleetProject, WorkflowInfo, TaskSummary } from "./types";
 import { loadCachedFleet, saveCachedFleet } from "./store";
-import "./App.css";
+import { cn } from "@/lib/utils";
 
 function App() {
   const [health, setHealth] = useState<DaemonHealth[]>([]);
@@ -112,37 +112,30 @@ function App() {
   const running = health.filter((h) => h.status === "running").length;
   const errors = events.filter((e) => e.level === "error").length;
 
+  const tabClass = (tab: string) => cn(
+    "px-4 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer",
+    activeTab === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+  );
+
   return (
-    <div className="app">
-      <header className="header">
-        <h1>AO Fleet</h1>
-        <div className="stats">
-          <div className="stat">
-            <span className="stat-value" style={{ color: "#22c55e" }}>{running}</span>
-            <span className="stat-label">running</span>
-          </div>
-          <div className="stat">
-            <span className="stat-value">{totalAgents}</span>
-            <span className="stat-label">agents</span>
-          </div>
-          <div className="stat">
-            <span className="stat-value" style={{ color: totalQueue > 20 ? "#eab308" : undefined }}>{totalQueue}</span>
-            <span className="stat-label">queued</span>
-          </div>
-          <div className="stat">
-            <span className="stat-value" style={{ color: errors > 0 ? "#ef4444" : undefined }}>{errors}</span>
-            <span className="stat-label">errors</span>
-          </div>
+    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
+      <header className="flex items-center gap-6 px-5 py-3 bg-card border-b border-border">
+        <h1 className="text-lg font-bold text-foreground whitespace-nowrap">AO Fleet</h1>
+        <div className="flex gap-5">
+          <StatPill value={running} label="running" color="text-chart-1" />
+          <StatPill value={totalAgents} label="agents" color="text-primary" />
+          <StatPill value={totalQueue} label="queued" color={totalQueue > 20 ? "text-chart-4" : "text-muted-foreground"} />
+          <StatPill value={errors} label="errors" color={errors > 0 ? "text-chart-5" : "text-muted-foreground"} />
         </div>
-        <div className="tabs">
-          <button className={activeTab === "overview" ? "tab active" : "tab"} onClick={() => setActiveTab("overview")}>Overview</button>
-          <button className={activeTab === "flow" ? "tab active" : "tab"} onClick={() => setActiveTab("flow")}>Flow</button>
-          <button className={activeTab === "stream" ? "tab active" : "tab"} onClick={() => setActiveTab("stream")}>Stream</button>
+        <div className="flex gap-1 ml-auto">
+          <button className={tabClass("overview")} onClick={() => setActiveTab("overview")}>Overview</button>
+          <button className={tabClass("flow")} onClick={() => setActiveTab("flow")}>Flow</button>
+          <button className={tabClass("stream")} onClick={() => setActiveTab("stream")}>Stream</button>
         </div>
       </header>
-      <main className="main">
+      <main className="flex-1 overflow-hidden">
         {loading ? (
-          <div className="loading">Discovering projects...</div>
+          <div className="flex items-center justify-center h-full text-muted-foreground">Discovering projects...</div>
         ) : activeTab === "overview" ? (
           <FleetOverview projects={fleet} events={events} />
         ) : activeTab === "flow" ? (
@@ -151,6 +144,15 @@ function App() {
           <EventStream events={events} />
         )}
       </main>
+    </div>
+  );
+}
+
+function StatPill({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className={cn("text-xl font-bold", color)}>{value}</span>
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</span>
     </div>
   );
 }

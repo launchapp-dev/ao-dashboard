@@ -4,29 +4,19 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { cn } from "@/lib/utils";
 import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo } from "./types";
 
 const STATUS_COLORS: Record<string, string> = {
-  running: "#22c55e",
-  stopped: "#6b7280",
-  crashed: "#ef4444",
-  offline: "#374151",
+  running: "#22c55e", stopped: "#6b7280", crashed: "#ef4444", offline: "#374151",
 };
 
 const TASK_COLORS: Record<string, string> = {
-  done: "#22c55e",
-  ready: "#3b82f6",
-  backlog: "#6b7280",
-  blocked: "#eab308",
-  in_progress: "#a78bfa",
-  cancelled: "#ef4444",
-  on_hold: "#f97316",
+  done: "#22c55e", ready: "#3b82f6", backlog: "#6b7280", blocked: "#eab308",
+  in_progress: "#a78bfa", cancelled: "#ef4444", on_hold: "#f97316",
 };
 
-interface Props {
-  projects: FleetProject[];
-  events: StreamEvent[];
-}
+interface Props { projects: FleetProject[]; events: StreamEvent[]; }
 
 export function FleetOverview({ projects, events }: Props) {
   const [selected, setSelected] = useState<FleetProject | null>(null);
@@ -50,56 +40,47 @@ export function FleetOverview({ projects, events }: Props) {
     .filter((p) => p.tasks && p.tasks.total > 0)
     .map((p) => ({
       name: p.name.replace("launchapp-", "").slice(0, 12),
-      done: p.tasks!.done,
-      ready: p.tasks!.ready,
-      backlog: p.tasks!.backlog,
-      blocked: p.tasks!.blocked,
-      in_progress: p.tasks!.in_progress,
+      done: p.tasks!.done, ready: p.tasks!.ready, backlog: p.tasks!.backlog,
+      blocked: p.tasks!.blocked, in_progress: p.tasks!.in_progress,
     }));
 
   return (
-    <div style={{ height: "calc(100vh - 60px)", overflow: selected ? "hidden" : "auto", padding: selected ? 0 : 20 }}>
+    <div className={cn("h-[calc(100vh-60px)]", selected ? "overflow-hidden" : "overflow-auto p-5")}>
       {!selected ? (
         <>
-          {/* Summary Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 20 }}>
-            <SummaryCard label="Projects" value={projects.length} color="#3b82f6" />
-            <SummaryCard label="Agents" value={`${totalAgents}/${totalPool}`} color="#22c55e" />
-            <SummaryCard label="Workflows" value={totalWorkflows} color="#a78bfa" />
-            <SummaryCard label="Queued" value={totalQueue} color={totalQueue > 20 ? "#eab308" : "#6b7280"} />
-            <SummaryCard label="Tasks Done" value={totalDone} color="#22c55e" />
-            <SummaryCard label="Total Tasks" value={totalTasks} color="#3b82f6" />
+          <div className="grid grid-cols-6 gap-3 mb-5">
+            <KPI label="Projects" value={projects.length} color="text-primary" />
+            <KPI label="Agents" value={`${totalAgents}/${totalPool}`} color="text-chart-1" />
+            <KPI label="Workflows" value={totalWorkflows} color="text-accent" />
+            <KPI label="Queued" value={totalQueue} color={totalQueue > 20 ? "text-chart-4" : "text-muted-foreground"} />
+            <KPI label="Tasks Done" value={totalDone} color="text-chart-1" />
+            <KPI label="Total Tasks" value={totalTasks} color="text-primary" />
           </div>
 
-          {/* Charts Row */}
-          <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 20, marginBottom: 20 }}>
-            <div style={{ background: "#111128", borderRadius: 12, padding: 16 }}>
-              <h3 style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>DAEMON STATUS</h3>
+          <div className="grid grid-cols-[200px_1fr] gap-5 mb-5">
+            <div className="bg-card rounded-xl p-4 border border-border">
+              <h3 className="text-xs text-muted-foreground mb-2 uppercase tracking-wide font-semibold">Daemon Status</h3>
               <ResponsiveContainer width="100%" height={150}>
                 <PieChart>
                   <Pie data={statusData} dataKey="value" cx="50%" cy="50%" innerRadius={30} outerRadius={55}>
-                    {statusData.map((d) => (
-                      <Cell key={d.name} fill={STATUS_COLORS[d.name] || "#333"} />
-                    ))}
+                    {statusData.map((d) => (<Cell key={d.name} fill={STATUS_COLORS[d.name] || "#333"} />))}
                   </Pie>
-                  <Tooltip contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 6 }} />
+                  <Tooltip contentStyle={{ background: "hsl(225 35% 7%)", border: "1px solid hsl(225 20% 15%)", borderRadius: 6 }} />
                 </PieChart>
               </ResponsiveContainer>
-              <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+              <div className="flex gap-2 justify-center flex-wrap">
                 {statusData.map((d) => (
-                  <span key={d.name} style={{ fontSize: 10, color: STATUS_COLORS[d.name] }}>
-                    {d.name}: {d.value}
-                  </span>
+                  <span key={d.name} className="text-[10px]" style={{ color: STATUS_COLORS[d.name] }}>{d.name}: {d.value}</span>
                 ))}
               </div>
             </div>
-            <div style={{ background: "#111128", borderRadius: 12, padding: 16 }}>
-              <h3 style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>TASK DISTRIBUTION</h3>
+            <div className="bg-card rounded-xl p-4 border border-border">
+              <h3 className="text-xs text-muted-foreground mb-2 uppercase tracking-wide font-semibold">Task Distribution</h3>
               <ResponsiveContainer width="100%" height={170}>
                 <BarChart data={taskBarData} barSize={16}>
                   <XAxis dataKey="name" tick={{ fill: "#666", fontSize: 10 }} />
                   <YAxis tick={{ fill: "#666", fontSize: 10 }} />
-                  <Tooltip contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 6, fontSize: 12 }} />
+                  <Tooltip contentStyle={{ background: "hsl(225 35% 7%)", border: "1px solid hsl(225 20% 15%)", borderRadius: 6, fontSize: 12 }} />
                   <Bar dataKey="done" stackId="a" fill={TASK_COLORS.done} />
                   <Bar dataKey="ready" stackId="a" fill={TASK_COLORS.ready} />
                   <Bar dataKey="in_progress" stackId="a" fill={TASK_COLORS.in_progress} />
@@ -110,8 +91,7 @@ export function FleetOverview({ projects, events }: Props) {
             </div>
           </div>
 
-          {/* Project Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
             {projects.map((p) => (
               <ProjectCard key={p.root} project={p} events={events} onClick={() => setSelected(p)} />
             ))}
@@ -124,11 +104,11 @@ export function FleetOverview({ projects, events }: Props) {
   );
 }
 
-function SummaryCard({ label, value, color }: { label: string; value: string | number; color: string }) {
+function KPI({ label, value, color }: { label: string; value: string | number; color: string }) {
   return (
-    <div style={{ background: "#111128", borderRadius: 10, padding: "12px 16px", borderLeft: `3px solid ${color}` }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: 11, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+    <div className="bg-card rounded-lg p-3 border-l-[3px] border-border" style={{ borderLeftColor: "currentColor" }}>
+      <div className={cn("text-xl font-bold", color)}>{value}</div>
+      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
     </div>
   );
 }
@@ -141,57 +121,42 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
   return (
     <div
       onClick={onClick}
-      style={{
-        background: "#111128",
-        border: `1px solid ${color}40`,
-        borderRadius: 10,
-        padding: 14,
-        cursor: "pointer",
-        transition: "border-color 0.2s",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = color)}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = `${color}40`)}
+      className="bg-card rounded-lg p-3.5 cursor-pointer border transition-colors hover:border-primary/50"
+      style={{ borderColor: `${color}40` }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</span>
-        <span style={{ background: color, color: "#000", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>
-          {status}
-        </span>
+      <div className="flex justify-between items-center mb-2">
+        <span className="font-bold text-[13px] text-foreground">{p.name}</span>
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: color, color: "#000" }}>{status}</span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 11, marginBottom: 8 }}>
-        <div><span style={{ color: "#666" }}>agents </span><span style={{ fontWeight: 600 }}>{p.health?.active_agents || 0}/{p.health?.pool_size || 0}</span></div>
-        <div><span style={{ color: "#666" }}>queue </span><span style={{ fontWeight: 600, color: (p.health?.queued_tasks || 0) > 10 ? "#eab308" : "inherit" }}>{p.health?.queued_tasks || 0}</span></div>
-        <div><span style={{ color: "#666" }}>wf </span><span style={{ fontWeight: 600, color: "#a78bfa" }}>{p.workflows.length}</span></div>
+      <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
+        <div><span className="text-muted-foreground">agents </span><span className="font-semibold">{p.health?.active_agents || 0}/{p.health?.pool_size || 0}</span></div>
+        <div><span className="text-muted-foreground">queue </span><span className={cn("font-semibold", (p.health?.queued_tasks || 0) > 10 && "text-chart-4")}>{p.health?.queued_tasks || 0}</span></div>
+        <div><span className="text-muted-foreground">wf </span><span className="font-semibold text-accent">{p.workflows.length}</span></div>
       </div>
 
-      {/* Utilization bar */}
-      <div style={{ height: 3, background: "#222", borderRadius: 2, overflow: "hidden", marginBottom: 6 }}>
-        <div style={{
+      <div className="h-[3px] bg-secondary rounded-full overflow-hidden mb-1.5">
+        <div className="h-full transition-all duration-500" style={{
           width: `${p.health?.pool_utilization_percent || 0}%`,
-          height: "100%",
           background: (p.health?.pool_utilization_percent || 0) > 80 ? "#22c55e" : "#3b82f6",
-          transition: "width 0.5s",
         }} />
       </div>
 
-      {/* Active workflows */}
       {p.workflows.length > 0 && (
-        <div style={{ fontSize: 10, color: "#888" }}>
+        <div className="text-[10px] text-muted-foreground">
           {p.workflows.slice(0, 2).map((wf, i) => (
-            <div key={i} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#3b82f6", display: "inline-block", animation: "pulse 2s infinite" }} />
-              <span style={{ color: "#a78bfa" }}>{wf.workflow_ref}</span>
-              <span style={{ color: "#555" }}>→ {wf.current_phase}</span>
+            <div key={i} className="flex gap-1 items-center">
+              <span className="w-[5px] h-[5px] rounded-full bg-primary inline-block animate-pulse" />
+              <span className="text-accent">{wf.workflow_ref}</span>
+              <span className="text-muted-foreground/50">→ {wf.current_phase}</span>
             </div>
           ))}
-          {p.workflows.length > 2 && <div style={{ color: "#555" }}>+{p.workflows.length - 2} more</div>}
+          {p.workflows.length > 2 && <div className="text-muted-foreground/40">+{p.workflows.length - 2} more</div>}
         </div>
       )}
 
-      {/* Task summary mini bar */}
       {p.tasks && p.tasks.total > 0 && (
-        <div style={{ marginTop: 6, display: "flex", height: 3, borderRadius: 2, overflow: "hidden", background: "#222" }}>
+        <div className="mt-1.5 flex h-[3px] rounded-full overflow-hidden bg-secondary">
           {p.tasks.done > 0 && <div style={{ width: `${(p.tasks.done / p.tasks.total) * 100}%`, background: TASK_COLORS.done }} />}
           {p.tasks.ready > 0 && <div style={{ width: `${(p.tasks.ready / p.tasks.total) * 100}%`, background: TASK_COLORS.ready }} />}
           {p.tasks.backlog > 0 && <div style={{ width: `${(p.tasks.backlog / p.tasks.total) * 100}%`, background: TASK_COLORS.backlog }} />}
@@ -199,16 +164,13 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
         </div>
       )}
 
-      {/* Recent events */}
       {recentEvents.length > 0 && (
-        <div style={{ marginTop: 6, fontSize: 9, maxHeight: 36, overflow: "hidden" }}>
+        <div className="mt-1.5 text-[9px] max-h-[36px] overflow-hidden">
           {recentEvents.map((e, i) => (
-            <div key={i} style={{
-              color: e.level === "error" ? "#ef4444" : e.level === "warn" ? "#eab308" : "#555",
-              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "12px",
-            }}>
-              {e.msg.slice(0, 40)}
-            </div>
+            <div key={i} className={cn(
+              "whitespace-nowrap overflow-hidden text-ellipsis leading-[12px]",
+              e.level === "error" ? "text-chart-5" : e.level === "warn" ? "text-chart-4" : "text-muted-foreground/40"
+            )}>{e.msg.slice(0, 40)}</div>
           ))}
         </div>
       )}
@@ -269,58 +231,55 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
     setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
   };
 
-  const sidebarItem = (label: string, count: number, active: boolean, onClick: () => void, dot?: string, key?: string) => (
-    <div
-      key={key || label}
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 6, cursor: "pointer", fontSize: 11,
-        background: active ? "#1a1a3e" : "transparent", color: active ? "#fff" : "#888",
-      }}
-    >
-      {dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />}
-      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ fontSize: 9, color: "#555", flexShrink: 0 }}>{count}</span>
+  const tabBtn = (mode: typeof viewMode, label: string, extra?: string) => (
+    <button onClick={() => setViewMode(mode)} className={cn(
+      "px-3 py-1 rounded text-[11px] border transition-colors cursor-pointer",
+      viewMode === mode ? "bg-primary/20 border-primary/40 text-foreground" : "bg-transparent border-border text-muted-foreground hover:text-foreground"
+    )}>{label}{extra || ""}</button>
+  );
+
+  const sidebarItem = (label: string, count: number, active: boolean, onClick: () => void, dot?: string) => (
+    <div onClick={onClick} className={cn(
+      "flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-[11px]",
+      active ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:text-foreground"
+    )}>
+      {dot && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} />}
+      <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
+      <span className="text-[9px] text-muted-foreground/50 shrink-0">{count}</span>
     </div>
   );
 
   return (
-    <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ flexShrink: 0, padding: "12px 20px 0" }}>
-        <button onClick={onBack} style={{
-          background: "transparent", border: "1px solid #333", color: "#888",
-          padding: "6px 14px", borderRadius: 6, cursor: "pointer", marginBottom: 12, fontSize: 12,
-        }}>
+    <div className="h-full w-full flex flex-col overflow-hidden">
+      <div className="shrink-0 px-5 pt-3">
+        <button onClick={onBack} className="mb-3 px-3 py-1.5 rounded border border-border text-muted-foreground text-xs cursor-pointer hover:text-foreground hover:border-primary/40 transition-colors">
           ← Back to Fleet
         </button>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{p.name}</h2>
-          <span style={{
-            background: STATUS_COLORS[p.health?.status || "offline"],
-            color: "#000", padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-          }}>
-            {p.health?.status || "offline"}
-          </span>
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="text-xl font-bold">{p.name}</h2>
+          <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded" style={{
+            background: STATUS_COLORS[p.health?.status || "offline"], color: "#000",
+          }}>{p.health?.status || "offline"}</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 12 }}>
-          <SummaryCard label="Agents" value={`${p.health?.active_agents || 0}/${p.health?.pool_size || 0}`} color="#22c55e" />
-          <SummaryCard label="Queue" value={p.health?.queued_tasks || 0} color="#eab308" />
-          <SummaryCard label="Workflows" value={p.workflows.length} color="#a78bfa" />
-          <SummaryCard label="Tasks Done" value={p.tasks?.done || 0} color="#22c55e" />
-          <SummaryCard label="Total Tasks" value={p.tasks?.total || 0} color="#3b82f6" />
+        <div className="grid grid-cols-5 gap-2.5 mb-3">
+          <KPI label="Agents" value={`${p.health?.active_agents || 0}/${p.health?.pool_size || 0}`} color="text-chart-1" />
+          <KPI label="Queue" value={p.health?.queued_tasks || 0} color="text-chart-4" />
+          <KPI label="Workflows" value={p.workflows.length} color="text-accent" />
+          <KPI label="Tasks Done" value={p.tasks?.done || 0} color="text-chart-1" />
+          <KPI label="Total Tasks" value={p.tasks?.total || 0} color="text-primary" />
         </div>
 
         {p.tasks && (
-          <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <div className="flex gap-3 mb-3 flex-wrap">
             {Object.entries(TASK_COLORS).map(([status, color]) => {
               const count = (p.tasks as unknown as Record<string, number>)?.[status] || 0;
               if (count === 0) return null;
               return (
-                <div key={status} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color }}>{count}</span>
-                  <span style={{ fontSize: 10, color: "#666" }}>{status}</span>
+                <div key={status} className="flex items-center gap-1">
+                  <span className="text-sm font-bold" style={{ color }}>{count}</span>
+                  <span className="text-[10px] text-muted-foreground">{status}</span>
                 </div>
               );
             })}
@@ -328,23 +287,11 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 6, padding: "0 20px 8px", flexShrink: 0 }}>
-        <button onClick={() => setViewMode("stream")} style={{
-          background: viewMode === "stream" ? "#1a1a3e" : "transparent", border: "1px solid #333",
-          color: viewMode === "stream" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
-        }}>Stream</button>
-        <button onClick={() => setViewMode("config")} style={{
-          background: viewMode === "config" ? "#1a1a3e" : "transparent", border: "1px solid #333",
-          color: viewMode === "config" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
-        }}>Config</button>
-        <button onClick={() => setViewMode("tasks")} style={{
-          background: viewMode === "tasks" ? "#1a1a3e" : "transparent", border: "1px solid #333",
-          color: viewMode === "tasks" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
-        }}>Tasks{taskList.length > 0 ? ` (${taskList.length})` : ""}</button>
-        <button onClick={() => setViewMode("commits")} style={{
-          background: viewMode === "commits" ? "#1a1a3e" : "transparent", border: "1px solid #333",
-          color: viewMode === "commits" ? "#fff" : "#888", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11,
-        }}>Commits</button>
+      <div className="flex gap-1.5 px-5 pb-2 shrink-0">
+        {tabBtn("stream", "Stream")}
+        {tabBtn("config", "Config")}
+        {tabBtn("tasks", "Tasks", taskList.length > 0 ? ` (${taskList.length})` : "")}
+        {tabBtn("commits", "Commits")}
       </div>
 
       {viewMode === "config" && config ? (
@@ -354,13 +301,13 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
       ) : viewMode === "commits" ? (
         <CommitsView commits={commits} />
       ) : (
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 10, padding: "0 20px 12px", minHeight: 0, overflow: "hidden" }}>
-        <div style={{ background: "#111128", borderRadius: 10, padding: 10, overflow: "auto", minWidth: 0 }}>
+      <div className="flex-1 grid grid-cols-[180px_minmax(0,1fr)] gap-2.5 px-5 pb-3 min-h-0 overflow-hidden">
+        <div className="bg-card rounded-lg p-2.5 overflow-auto min-w-0 border border-border">
           {sidebarItem("All Events", projectEvents.length, streamFilter.type === "all", () => setStreamFilter({ type: "all" }), "#3b82f6")}
 
           {workflowRefs.size > 0 && (
             <>
-              <div style={{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 8px 4px", fontWeight: 600 }}>Workflows</div>
+              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Workflows</div>
               {[...workflowRefs].map(([ref, { count, active }]) =>
                 sidebarItem(ref, count, streamFilter.type === "workflow" && streamFilter.value === ref,
                   () => setStreamFilter({ type: "workflow", value: ref }),
@@ -371,12 +318,12 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
 
           {modelNames.size > 0 && (
             <>
-              <div style={{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 8px 4px", fontWeight: 600 }}>Models</div>
+              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Models</div>
               {[...modelNames].map(([name, count]) => (
-                <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 11, color: "#888" }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", flexShrink: 0 }} />
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name.replace("kimi-code/", "")}</span>
-                  <span style={{ fontSize: 9, color: "#555" }}>{count}</span>
+                <div key={name} className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{name.replace("kimi-code/", "")}</span>
+                  <span className="text-[9px] text-muted-foreground/50">{count}</span>
                 </div>
               ))}
             </>
@@ -384,23 +331,23 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
 
           {p.workflows.length > 0 && (
             <>
-              <div style={{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 8px 4px", fontWeight: 600 }}>Active Runs</div>
+              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Active Runs</div>
               {p.workflows.map((wf) => (
                 <div
                   key={wf.id}
                   onClick={() => setStreamFilter({ type: "run", value: wf.task_id !== "cron" ? wf.task_id : `schedule:${wf.workflow_ref}`, label: `${wf.workflow_ref} → ${wf.current_phase}` })}
-                  style={{
-                    padding: "4px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4,
-                    background: streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "#1a1a3e" : "transparent",
-                  }}
+                  className={cn(
+                    "px-2 py-1 text-[10px] cursor-pointer rounded",
+                    streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "bg-primary/15" : ""
+                  )}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#3b82f6", animation: "pulse 2s infinite" }} />
-                    <span style={{ color: "#a78bfa", fontWeight: 600 }}>{wf.workflow_ref}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="w-[5px] h-[5px] rounded-full bg-primary animate-pulse" />
+                    <span className="text-accent font-semibold">{wf.workflow_ref}</span>
                   </div>
-                  <div style={{ color: "#555", paddingLeft: 9 }}>
+                  <div className="text-muted-foreground/50 pl-[9px]">
                     {wf.current_phase} ({wf.phase_progress})
-                    {wf.task_id !== "cron" && <span style={{ color: "#444" }}> · {wf.task_id}</span>}
+                    {wf.task_id !== "cron" && <span className="text-muted-foreground/30"> · {wf.task_id}</span>}
                   </div>
                 </div>
               ))}
@@ -408,29 +355,23 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
           )}
         </div>
 
-        <div style={{ background: "#111128", borderRadius: 10, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderBottom: "1px solid #1a1a2e", flexShrink: 0, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>
+        <div className="bg-card rounded-lg flex flex-col min-h-0 min-w-0 overflow-hidden border border-border">
+          <div className="flex gap-2 px-3 py-2.5 border-b border-border shrink-0 items-center">
+            <span className="text-[11px] text-muted-foreground font-semibold">
               {streamFilter.type === "all" ? "ALL" : streamFilter.type === "run" ? streamFilter.label : streamFilter.value?.toUpperCase()}
             </span>
-            <span style={{ fontSize: 10, color: "#444" }}>{filtered.length} events</span>
-            <div style={{ flex: 1 }} />
+            <span className="text-[10px] text-muted-foreground/40">{filtered.length} events</span>
+            <div className="flex-1" />
             <input
               placeholder="Filter..."
               value={textFilter}
               onChange={(e) => setTextFilter(e.target.value)}
-              style={{
-                background: "#0a0a1a", border: "1px solid #222", borderRadius: 4, color: "#ccc",
-                padding: "3px 8px", fontSize: 11, width: 160, outline: "none",
-              }}
+              className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground w-40 outline-none focus:border-primary"
             />
             <select
               value={levelFilter}
               onChange={(e) => setLevelFilter(e.target.value)}
-              style={{
-                background: "#0a0a1a", border: "1px solid #222", borderRadius: 4, color: "#ccc",
-                padding: "3px 6px", fontSize: 11, outline: "none",
-              }}
+              className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px] text-foreground outline-none"
             >
               <option value="all">All levels</option>
               <option value="error">Error</option>
@@ -439,36 +380,25 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
             </select>
           </div>
 
-          <div ref={logRef} onScroll={handleLogScroll} style={{
-            flex: 1, overflow: "auto", padding: "4px 12px",
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 11, lineHeight: "16px",
-          }}>
+          <div ref={logRef} onScroll={handleLogScroll} className="flex-1 overflow-auto px-3 py-1 font-mono text-[11px] leading-4">
             {filtered.length === 0 ? (
-              <div style={{ color: "#444", padding: 20, textAlign: "center" }}>No events matching filter</div>
+              <div className="text-muted-foreground/30 p-5 text-center">No events matching filter</div>
             ) : (
               filtered.map((e, i) => (
-                  <div key={i} style={{
-                    display: "flex", gap: 8, padding: "1px 0",
-                    color: e.level === "error" ? "#ef4444" : e.level === "warn" ? "#eab308" : "#888",
-                  }}>
-                    <span style={{ color: "#444", minWidth: 55, flexShrink: 0 }}>{e.ts.slice(11, 19)}</span>
-                    <span style={{ color: "#555", minWidth: 90, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.cat}</span>
-                    {e.workflow_ref && (
-                      <span
-                        onClick={() => setStreamFilter({ type: "workflow", value: e.workflow_ref! })}
-                        style={{ color: "#a78bfa", flexShrink: 0, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}
-                      >
-                        {e.workflow_ref}
-                      </span>
-                    )}
-                    {e.phase_id && (
-                      <span style={{ color: "#38bdf8", flexShrink: 0, fontSize: 10 }}>{e.phase_id}</span>
-                    )}
-                    {e.model && (
-                      <span style={{ color: "#666", flexShrink: 0, fontSize: 10 }}>{e.model.replace("kimi-code/", "")}</span>
-                    )}
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.msg}</span>
-                  </div>
+                <div key={i} className={cn(
+                  "flex gap-2 py-px",
+                  e.level === "error" ? "text-chart-5" : e.level === "warn" ? "text-chart-4" : "text-muted-foreground"
+                )}>
+                  <span className="text-muted-foreground/30 min-w-[55px] shrink-0">{e.ts.slice(11, 19)}</span>
+                  <span className="text-muted-foreground/50 min-w-[90px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap">{e.cat}</span>
+                  {e.workflow_ref && (
+                    <span onClick={() => setStreamFilter({ type: "workflow", value: e.workflow_ref! })}
+                      className="text-accent shrink-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{e.workflow_ref}</span>
+                  )}
+                  {e.phase_id && <span className="text-primary shrink-0 text-[10px]">{e.phase_id}</span>}
+                  {e.model && <span className="text-muted-foreground/40 shrink-0 text-[10px]">{e.model.replace("kimi-code/", "")}</span>}
+                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{e.msg}</span>
+                </div>
               ))
             )}
             <div ref={bottomRef} />
@@ -476,82 +406,49 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
         </div>
       </div>
       )}
-
-      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
     </div>
   );
 }
 
-const PRIORITY_COLORS: Record<string, string> = {
-  critical: "#ef4444",
-  high: "#f97316",
-  medium: "#eab308",
-  low: "#6b7280",
-};
-
+const PRIORITY_COLORS: Record<string, string> = { critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "#6b7280" };
 const TASK_STATUS_COLORS: Record<string, string> = {
-  done: "#22c55e",
-  ready: "#3b82f6",
-  "in-progress": "#a78bfa",
-  in_progress: "#a78bfa",
-  blocked: "#eab308",
-  backlog: "#6b7280",
-  cancelled: "#ef4444",
-  "on-hold": "#f97316",
-  on_hold: "#f97316",
+  done: "#22c55e", ready: "#3b82f6", "in-progress": "#a78bfa", in_progress: "#a78bfa",
+  blocked: "#eab308", backlog: "#6b7280", cancelled: "#ef4444", "on-hold": "#f97316", on_hold: "#f97316",
 };
 
 function TasksView({ tasks }: { tasks: TaskInfo[] }) {
   const [statusFilter, setStatusFilter] = useState("all");
-
   const statuses = new Map<string, number>();
   tasks.forEach((t) => statuses.set(t.status, (statuses.get(t.status) || 0) + 1));
-
   const filtered = statusFilter === "all" ? tasks : tasks.filter((t) => t.status === statusFilter);
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px" }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <span
-          onClick={() => setStatusFilter("all")}
-          style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer", background: statusFilter === "all" ? "#1a1a3e" : "#111128", color: statusFilter === "all" ? "#fff" : "#888" }}
-        >All ({tasks.length})</span>
+    <div className="flex-1 overflow-auto px-5 pb-3">
+      <div className="flex gap-2 mb-2.5 flex-wrap items-center">
+        <span onClick={() => setStatusFilter("all")}
+          className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === "all" ? "bg-primary/15 border-primary/40 text-foreground" : "bg-card border-border text-muted-foreground")}>
+          All ({tasks.length})
+        </span>
         {[...statuses].sort((a, b) => b[1] - a[1]).map(([status, count]) => (
-          <span
-            key={status}
-            onClick={() => setStatusFilter(statusFilter === status ? "all" : status)}
-            style={{
-              fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-              background: statusFilter === status ? "#1a1a3e" : "#111128",
-              color: TASK_STATUS_COLORS[status] || "#888",
-              border: `1px solid ${statusFilter === status ? (TASK_STATUS_COLORS[status] || "#333") : "#222"}`,
-            }}
-          >{status} ({count})</span>
+          <span key={status} onClick={() => setStatusFilter(statusFilter === status ? "all" : status)}
+            className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === status ? "bg-primary/15" : "bg-card")}
+            style={{ color: TASK_STATUS_COLORS[status] || "#888", borderColor: statusFilter === status ? (TASK_STATUS_COLORS[status] || "#333") : "hsl(225 20% 15%)" }}>
+            {status} ({count})
+          </span>
         ))}
       </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div className="flex flex-col gap-1">
         {filtered.map((t) => (
-          <div key={t.id} style={{
-            display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-            background: "#111128", borderRadius: 6,
-            borderLeft: `3px solid ${TASK_STATUS_COLORS[t.status] || "#333"}`,
-          }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#555", minWidth: 65, fontFamily: "'JetBrains Mono', monospace" }}>{t.id}</span>
-            <span style={{
-              fontSize: 9, padding: "2px 6px", borderRadius: 3, fontWeight: 600, minWidth: 60, textAlign: "center",
-              background: `${TASK_STATUS_COLORS[t.status] || "#333"}20`,
-              color: TASK_STATUS_COLORS[t.status] || "#888",
-            }}>{t.status}</span>
-            <span style={{
-              fontSize: 9, padding: "2px 5px", borderRadius: 3,
-              color: PRIORITY_COLORS[t.priority] || "#666",
-              background: `${PRIORITY_COLORS[t.priority] || "#333"}15`,
-            }}>{t.priority}</span>
-            <span style={{ fontSize: 11, color: "#ccc", flex: 1 }}>{t.title}</span>
+          <div key={t.id} className="flex items-center gap-2.5 px-2.5 py-2 bg-card rounded border border-border"
+            style={{ borderLeftColor: TASK_STATUS_COLORS[t.status] || "#333", borderLeftWidth: 3 }}>
+            <span className="text-[10px] font-bold text-muted-foreground min-w-[65px] font-mono">{t.id}</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold min-w-[60px] text-center"
+              style={{ background: `${TASK_STATUS_COLORS[t.status] || "#333"}20`, color: TASK_STATUS_COLORS[t.status] || "#888" }}>{t.status}</span>
+            <span className="text-[9px] px-1 py-0.5 rounded" style={{ color: PRIORITY_COLORS[t.priority] || "#666" }}>{t.priority}</span>
+            <span className="text-[11px] text-foreground flex-1">{t.title}</span>
           </div>
         ))}
-        {filtered.length === 0 && <div style={{ color: "#444", textAlign: "center", padding: 20, fontSize: 12 }}>No tasks</div>}
+        {filtered.length === 0 && <div className="text-muted-foreground text-center p-5 text-xs">No tasks</div>}
       </div>
     </div>
   );
@@ -559,19 +456,16 @@ function TasksView({ tasks }: { tasks: TaskInfo[] }) {
 
 function CommitsView({ commits }: { commits: CommitInfo[] }) {
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px" }}>
-      <div style={{ background: "#111128", borderRadius: 10, padding: 12 }}>
+    <div className="flex-1 overflow-auto px-5 pb-3">
+      <div className="bg-card rounded-lg p-3 border border-border">
         {commits.map((c, i) => (
-          <div key={i} style={{
-            display: "flex", gap: 10, padding: "5px 0", borderBottom: "1px solid #1a1a2e",
-            fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
-          }}>
-            <span style={{ color: "#eab308", minWidth: 60, flexShrink: 0 }}>{c.hash}</span>
-            <span style={{ color: "#888", minWidth: 80, flexShrink: 0, fontSize: 9 }}>{c.date.slice(0, 10)}</span>
-            <span style={{ color: "#ccc", flex: 1 }}>{c.message}</span>
+          <div key={i} className="flex gap-2.5 py-1 border-b border-border/50 text-[11px] font-mono">
+            <span className="text-chart-4 min-w-[60px] shrink-0">{c.hash}</span>
+            <span className="text-muted-foreground min-w-[80px] shrink-0 text-[9px]">{c.date.slice(0, 10)}</span>
+            <span className="text-foreground flex-1">{c.message}</span>
           </div>
         ))}
-        {commits.length === 0 && <div style={{ color: "#444", textAlign: "center", padding: 20, fontSize: 12 }}>No commits</div>}
+        {commits.length === 0 && <div className="text-muted-foreground text-center p-5 text-xs">No commits</div>}
       </div>
     </div>
   );
@@ -582,10 +476,7 @@ function cronToHuman(cron: string): string {
   if (parts.length < 5) return cron;
   const [min, hour] = parts;
   if (min.startsWith("*/")) return `Every ${min.slice(2)} min`;
-  if (min.includes("-") && min.includes("/")) {
-    const interval = min.split("/")[1];
-    return `Every ${interval} min`;
-  }
+  if (min.includes("-") && min.includes("/")) return `Every ${min.split("/")[1]} min`;
   if (hour.startsWith("*/")) return `Every ${hour.slice(2)} hours`;
   if (hour === "*" && min.match(/^\d+$/)) return `Hourly at :${min.padStart(2, "0")}`;
   return cron;
@@ -595,33 +486,26 @@ function ConfigView({ config }: { config: ProjectConfig }) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [expandedPhase, setExpandedPhase] = useState<string | null>(null);
 
-  const sectionStyle = { background: "#111128", borderRadius: 10, padding: 12 };
-  const headerStyle = { fontSize: 11, color: "#555", textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 };
-
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "0 20px 12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, alignContent: "start" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={sectionStyle}>
-          <h3 style={headerStyle}>Workflows ({config.workflows.length})</h3>
+    <div className="flex-1 overflow-auto px-5 pb-3 grid grid-cols-2 gap-2.5 content-start">
+      <div className="flex flex-col gap-2.5">
+        <div className="bg-card rounded-lg p-3 border border-border">
+          <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Workflows ({config.workflows.length})</h3>
           {config.workflows.map((wf) => (
-            <div key={wf.id} style={{ marginBottom: 10, padding: 8, background: "#0a0a1a", borderRadius: 6, borderLeft: "3px solid #a78bfa" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                <span style={{ fontWeight: 600, fontSize: 12, color: "#a78bfa" }}>{wf.id}</span>
-                {wf.name && <span style={{ fontSize: 10, color: "#666" }}>— {wf.name}</span>}
+            <div key={wf.id} className="mb-2.5 p-2 bg-background rounded border-l-[3px] border-accent">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <span className="font-semibold text-xs text-accent">{wf.id}</span>
+                {wf.name && <span className="text-[10px] text-muted-foreground">— {wf.name}</span>}
               </div>
-              {wf.description && <div style={{ fontSize: 10, color: "#555", marginBottom: 4 }}>{wf.description}</div>}
-              <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+              {wf.description && <div className="text-[10px] text-muted-foreground/50 mb-1">{wf.description}</div>}
+              <div className="flex gap-1 flex-wrap">
                 {wf.phases.map((pid, i) => {
                   const phase = config.phases.find((p) => p.id === pid);
                   return (
-                    <span key={i} style={{
-                      fontSize: 9, padding: "2px 6px", borderRadius: 3, cursor: "pointer",
-                      background: phase?.mode === "command" ? "#1a2a1a" : "#1a1a2e",
-                      color: phase?.mode === "command" ? "#22c55e" : "#38bdf8",
-                      border: `1px solid ${phase?.mode === "command" ? "#22c55e30" : "#38bdf830"}`,
-                    }} onClick={() => setExpandedPhase(expandedPhase === pid ? null : pid)}>
-                      {i + 1}. {pid}
-                    </span>
+                    <span key={i} onClick={() => setExpandedPhase(expandedPhase === pid ? null : pid)}
+                      className={cn("text-[9px] px-1.5 py-0.5 rounded cursor-pointer border",
+                        phase?.mode === "command" ? "bg-chart-1/10 text-chart-1 border-chart-1/20" : "bg-primary/10 text-primary border-primary/20"
+                      )}>{i + 1}. {pid}</span>
                   );
                 })}
               </div>
@@ -629,51 +513,46 @@ function ConfigView({ config }: { config: ProjectConfig }) {
           ))}
         </div>
 
-        <div style={sectionStyle}>
-          <h3 style={headerStyle}>Schedules ({config.schedules.length})</h3>
+        <div className="bg-card rounded-lg p-3 border border-border">
+          <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Schedules ({config.schedules.length})</h3>
           {config.schedules.map((s) => (
-            <div key={s.id} style={{ padding: "6px 8px", marginBottom: 4, background: "#0a0a1a", borderRadius: 4, borderLeft: `3px solid ${s.enabled ? "#eab308" : "#333"}` }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "#eab308", fontWeight: 600, fontSize: 11 }}>{s.id}</span>
-                {!s.enabled && <span style={{ fontSize: 8, color: "#ef4444", background: "#1a0a0a", padding: "1px 4px", borderRadius: 2 }}>disabled</span>}
+            <div key={s.id} className={cn("p-1.5 px-2 mb-1 bg-background rounded border-l-[3px]", s.enabled ? "border-chart-4" : "border-muted-foreground/20")}>
+              <div className="flex justify-between items-center">
+                <span className="text-chart-4 font-semibold text-[11px]">{s.id}</span>
+                {!s.enabled && <span className="text-[8px] text-chart-5 bg-chart-5/10 px-1 py-px rounded">disabled</span>}
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                <span style={{ fontSize: 10, color: "#888" }}>{cronToHuman(s.cron)}</span>
-                <span style={{ fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono', monospace" }}>{s.cron}</span>
+              <div className="flex justify-between mt-0.5">
+                <span className="text-[10px] text-muted-foreground">{cronToHuman(s.cron)}</span>
+                <span className="text-[9px] text-muted-foreground/40 font-mono">{s.cron}</span>
               </div>
-              <div style={{ fontSize: 9, color: "#a78bfa", marginTop: 1 }}>→ {s.workflow_ref}</div>
+              <div className="text-[9px] text-accent mt-px">→ {s.workflow_ref}</div>
             </div>
           ))}
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={sectionStyle}>
-          <h3 style={headerStyle}>Agents ({config.agents.length})</h3>
+      <div className="flex flex-col gap-2.5">
+        <div className="bg-card rounded-lg p-3 border border-border">
+          <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Agents ({config.agents.length})</h3>
           {config.agents.map((a) => (
-            <div key={a.name} style={{
-              padding: 8, marginBottom: 4, background: "#0a0a1a", borderRadius: 6, cursor: "pointer",
-              borderLeft: `3px solid ${expandedAgent === a.name ? "#38bdf8" : "#333"}`,
-            }} onClick={() => setExpandedAgent(expandedAgent === a.name ? null : a.name)}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "#38bdf8", fontWeight: 600, fontSize: 11 }}>{a.name}</span>
-                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <span style={{ fontSize: 9, color: "#666" }}>{a.model.replace("kimi-code/", "")}</span>
-                  <span style={{ fontSize: 9, color: "#444", background: "#1a1a2e", padding: "1px 4px", borderRadius: 2 }}>{a.tool}</span>
+            <div key={a.name} onClick={() => setExpandedAgent(expandedAgent === a.name ? null : a.name)}
+              className={cn("p-2 mb-1 bg-background rounded cursor-pointer border-l-[3px]", expandedAgent === a.name ? "border-primary" : "border-transparent")}>
+              <div className="flex justify-between items-center">
+                <span className="text-primary font-semibold text-[11px]">{a.name}</span>
+                <div className="flex gap-1 items-center">
+                  <span className="text-[9px] text-muted-foreground">{a.model.replace("kimi-code/", "")}</span>
+                  <span className="text-[9px] text-muted-foreground/40 bg-secondary px-1 py-px rounded">{a.tool}</span>
                 </div>
               </div>
               {a.mcp_servers.length > 0 && (
-                <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
+                <div className="flex gap-1 mt-1">
                   {a.mcp_servers.map((s) => (
-                    <span key={s} style={{ fontSize: 8, padding: "1px 4px", borderRadius: 2, background: "#1a2a1a", color: "#22c55e" }}>{s}</span>
+                    <span key={s} className="text-[8px] px-1 py-px rounded bg-chart-1/10 text-chart-1">{s}</span>
                   ))}
                 </div>
               )}
               {expandedAgent === a.name && a.system_prompt && (
-                <div style={{
-                  marginTop: 6, padding: 8, background: "#080818", borderRadius: 4, fontSize: 10, color: "#888",
-                  fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto", lineHeight: "14px",
-                }}>
+                <div className="mt-1.5 p-2 bg-card rounded text-[10px] text-muted-foreground font-mono whitespace-pre-wrap max-h-[200px] overflow-auto leading-[14px]">
                   {a.system_prompt}
                 </div>
               )}
@@ -681,30 +560,30 @@ function ConfigView({ config }: { config: ProjectConfig }) {
           ))}
         </div>
 
-        <div style={sectionStyle}>
-          <h3 style={headerStyle}>Phases ({config.phases.length})</h3>
+        <div className="bg-card rounded-lg p-3 border border-border">
+          <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Phases ({config.phases.length})</h3>
           {config.phases.map((ph) => (
-            <div key={ph.id} style={{
-              padding: 6, marginBottom: 3, background: "#0a0a1a", borderRadius: 4, cursor: "pointer",
-              borderLeft: `3px solid ${expandedPhase === ph.id ? (ph.mode === "command" ? "#22c55e" : "#38bdf8") : "#222"}`,
-            }} onClick={() => setExpandedPhase(expandedPhase === ph.id ? null : ph.id)}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: ph.mode === "command" ? "#22c55e" : "#38bdf8", fontWeight: 600, fontSize: 10 }}>{ph.id}</span>
-                <span style={{ fontSize: 9, color: "#444" }}>
+            <div key={ph.id} onClick={() => setExpandedPhase(expandedPhase === ph.id ? null : ph.id)}
+              className={cn("p-1.5 mb-0.5 bg-background rounded cursor-pointer border-l-[3px]",
+                expandedPhase === ph.id ? (ph.mode === "command" ? "border-chart-1" : "border-primary") : "border-transparent"
+              )}>
+              <div className="flex justify-between items-center">
+                <span className={cn("font-semibold text-[10px]", ph.mode === "command" ? "text-chart-1" : "text-primary")}>{ph.id}</span>
+                <span className="text-[9px] text-muted-foreground/30">
                   {ph.mode === "command" ? (ph.command ? `$ ${ph.command} ${ph.command_args.join(" ")}` : "cmd") : (ph.agent || "agent")}
                 </span>
               </div>
               {expandedPhase === ph.id && (
-                <div style={{ marginTop: 4, fontSize: 10, color: "#888" }}>
+                <div className="mt-1 text-[10px] text-muted-foreground">
                   {ph.mode === "command" && ph.command && (
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", background: "#080818", padding: 6, borderRadius: 4, marginBottom: 4 }}>
-                      <span style={{ color: "#22c55e" }}>$ {ph.command} {ph.command_args.join(" ")}</span>
-                      {ph.cwd_mode && <div style={{ color: "#555", fontSize: 9 }}>cwd: {ph.cwd_mode}</div>}
-                      {ph.timeout_secs && <div style={{ color: "#555", fontSize: 9 }}>timeout: {ph.timeout_secs}s</div>}
+                    <div className="font-mono bg-card p-1.5 rounded mb-1">
+                      <span className="text-chart-1">$ {ph.command} {ph.command_args.join(" ")}</span>
+                      {ph.cwd_mode && <div className="text-muted-foreground/30 text-[9px]">cwd: {ph.cwd_mode}</div>}
+                      {ph.timeout_secs && <div className="text-muted-foreground/30 text-[9px]">timeout: {ph.timeout_secs}s</div>}
                     </div>
                   )}
                   {ph.directive && (
-                    <div style={{ whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace", background: "#080818", padding: 6, borderRadius: 4, maxHeight: 150, overflow: "auto", lineHeight: "14px", fontSize: 9 }}>
+                    <div className="whitespace-pre-wrap font-mono bg-card p-1.5 rounded max-h-[150px] overflow-auto leading-[14px] text-[9px]">
                       {ph.directive}
                     </div>
                   )}
