@@ -152,9 +152,9 @@ export function FleetFlow({ health, events, projects }: Props) {
     const centerY = (startY: number, rows: number) => startY + (rows > 0 ? (rows * ROW) / 2 : 0) - 20;
 
     nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: centerY(mcpStartY, mcpRows) },
-      data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
+      data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp"), side: "left" } });
     nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: centerY(agentStartY, agentRows) },
-      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
+      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent"), side: "left" } });
     nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: centerY(schedStartY, schedRows) },
       data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
     nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: centerY(pipeStartY, pipeRows) },

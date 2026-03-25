@@ -9,6 +9,7 @@ interface Props {
     icon: string;
     expanded: boolean;
     onClick: () => void;
+    side?: "left" | "right";
   };
 }
 
@@ -22,7 +23,7 @@ export function GroupNode({ data }: Props) {
       )}
       style={{ borderColor: `${data.color}${data.expanded ? "60" : "30"}` }}
     >
-      <Handle type="target" position={Position.Left} style={{ background: data.color }} />
+      <Handle type="target" position={data.side === "left" ? Position.Right : Position.Left} style={{ background: data.color }} />
 
       <div className="flex items-center gap-2">
         <span className="text-sm">{data.icon}</span>
@@ -31,7 +32,7 @@ export function GroupNode({ data }: Props) {
         <span className="text-[10px] text-muted-foreground/30 ml-1">{data.expanded ? "▾" : "▸"}</span>
       </div>
 
-      <Handle type="source" position={Position.Right} style={{ background: data.color }} />
+      <Handle type="source" position={data.side === "left" ? Position.Left : Position.Right} style={{ background: data.color }} />
     </div>
   );
 }

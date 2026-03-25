@@ -11,6 +11,7 @@ export function McpNode({ data }: Props) {
   return (
     <div className="bg-card border border-chart-1/30 rounded-lg px-3 py-2 min-w-[120px] max-w-[180px] font-sans">
       <Handle type="target" position={Position.Right} style={{ background: "#22c55e" }} />
+      <Handle type="source" position={Position.Right} style={{ background: "#22c55e", top: "70%" }} />
 
       <div className="flex items-center gap-1.5">
         <span className="w-2 h-2 rounded-full bg-chart-1/50 shrink-0" />
@@ -22,7 +23,6 @@ export function McpNode({ data }: Props) {
         </div>
       )}
 
-      <Handle type="source" position={Position.Left} style={{ background: "#22c55e" }} />
     </div>
   );
 }
