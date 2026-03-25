@@ -82,7 +82,7 @@ export function FleetFlow({ health, events, projects }: Props) {
     const cfg = configs[proj.root];
     if (!cfg) return { nodes, edges };
 
-    const ROW = 100;
+    const ROW = 130;
     const isSched = expandedGroups.has("sched");
     const isPipe = expandedGroups.has("pipe");
     const isAgent = expandedGroups.has("agent");
@@ -103,18 +103,18 @@ export function FleetFlow({ health, events, projects }: Props) {
     cfg.phases.forEach((ph) => { if (ph.agent) { const l = agentPhaseMap.get(ph.agent) || []; l.push(ph.id); agentPhaseMap.set(ph.agent, l); } });
 
     // Columns (left to right)
-    const COL_MCP = -520;
-    const COL_MCP_GROUP = -300;
-    const COL_AGENT = -520;
-    const COL_AGENT_GROUP = -300;
+    const COL_MCP = -600;
+    const COL_MCP_GROUP = -350;
+    const COL_AGENT = -600;
+    const COL_AGENT_GROUP = -350;
     const COL_PROJECT = 0;
-    const COL_SCHED_GROUP = 300;
-    const COL_PIPE_GROUP = 300;
-    const COL_SCHED = 500;
-    const COL_WF = 700;
-    const COL_PHASE = 930;
-    const PHASE_W = 195;
-    const GAP = ROW * 0.8;
+    const COL_SCHED_GROUP = 350;
+    const COL_PIPE_GROUP = 350;
+    const COL_SCHED = 580;
+    const COL_WF = 800;
+    const COL_PHASE = 1050;
+    const PHASE_W = 210;
+    const GAP = ROW * 1.2;
 
     // Count rows per group
     const mcpRows = isMcp ? mcpServers.size : 0;
