@@ -82,7 +82,7 @@ export function FleetFlow({ health, events, projects }: Props) {
     const cfg = configs[proj.root];
     if (!cfg) return { nodes, edges };
 
-    const ROW = 85;
+    const ROW = 100;
     const isSched = expandedGroups.has("sched");
     const isPipe = expandedGroups.has("pipe");
     const isAgent = expandedGroups.has("agent");
@@ -102,42 +102,42 @@ export function FleetFlow({ health, events, projects }: Props) {
     const agentPhaseMap = new Map<string, string[]>();
     cfg.phases.forEach((ph) => { if (ph.agent) { const l = agentPhaseMap.get(ph.agent) || []; l.push(ph.id); agentPhaseMap.set(ph.agent, l); } });
 
-    // Layout columns (left to right)
-    const COL_MCP = -500;
+    // Columns (left to right)
+    const COL_MCP = -520;
     const COL_MCP_GROUP = -300;
-    const COL_AGENT = -500;
+    const COL_AGENT = -520;
     const COL_AGENT_GROUP = -300;
     const COL_PROJECT = 0;
-    const COL_SCHED_GROUP = 280;
-    const COL_PIPE_GROUP = 280;
-    const COL_SCHED = 480;
-    const COL_WF = 680;
-    const COL_PHASE = 910;
+    const COL_SCHED_GROUP = 300;
+    const COL_PIPE_GROUP = 300;
+    const COL_SCHED = 500;
+    const COL_WF = 700;
+    const COL_PHASE = 930;
     const PHASE_W = 195;
+    const GAP = ROW * 0.8;
 
-    // Calculate vertical positions
+    // Count rows per group
     const mcpRows = isMcp ? mcpServers.size : 0;
     const agentRows = isAgent ? cfg.agents.length : 0;
     const schedRows = isSched ? scheduledWfs.length : 0;
     const pipeRows = isPipe ? taskWfs.length : 0;
 
-    // Right side: schedules then pipelines
-    let rightY = 0;
-    const schedStartY = rightY;
-    rightY += (schedRows > 0 ? schedRows * ROW : ROW) + ROW * 0.5;
-    const pipeStartY = rightY;
-    rightY += (pipeRows > 0 ? pipeRows * ROW : ROW);
-    const rightTotalH = rightY;
+    // Calculate total height for each side
+    const leftH = Math.max(mcpRows, 1) * ROW + GAP + Math.max(agentRows, 1) * ROW;
+    const rightH = Math.max(schedRows, 1) * ROW + GAP + Math.max(pipeRows, 1) * ROW;
+    const totalH = Math.max(leftH, rightH);
+    const mid = totalH / 2;
 
-    // Left side: MCP then agents
-    let leftY = 0;
-    const mcpStartY = leftY;
-    leftY += (mcpRows > 0 ? mcpRows * ROW : ROW) + ROW * 0.5;
-    const agentStartY = leftY;
-    leftY += (agentRows > 0 ? agentRows * ROW : ROW);
+    // Center each side around the midpoint
+    const leftOffset = mid - leftH / 2;
+    const rightOffset = mid - rightH / 2;
 
-    const totalH = Math.max(rightTotalH, leftY);
-    const projY = totalH / 2 - ROW / 2;
+    const mcpStartY = leftOffset;
+    const agentStartY = leftOffset + Math.max(mcpRows, 1) * ROW + GAP;
+    const schedStartY = rightOffset;
+    const pipeStartY = rightOffset + Math.max(schedRows, 1) * ROW + GAP;
+
+    const projY = mid - ROW / 2;
 
     // PROJECT NODE
     nodes.push({
@@ -148,16 +148,16 @@ export function FleetFlow({ health, events, projects }: Props) {
       },
     });
 
-    // GROUP NODES
-    const centerY = (startY: number, rows: number) => startY + (rows > 0 ? (rows * ROW) / 2 : 0) - 20;
+    // Group hub Y = center of its children
+    const hubY = (startY: number, rows: number) => startY + Math.max(rows - 1, 0) * ROW / 2;
 
-    nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: centerY(mcpStartY, mcpRows) },
+    nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: hubY(mcpStartY, mcpRows) },
       data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
-    nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: centerY(agentStartY, agentRows) },
+    nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: hubY(agentStartY, agentRows) },
       data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
-    nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: centerY(schedStartY, schedRows) },
+    nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: hubY(schedStartY, schedRows) },
       data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
-    nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: centerY(pipeStartY, pipeRows) },
+    nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: hubY(pipeStartY, pipeRows) },
       data: { label: "Pipelines", count: taskWfs.length, color: "#3b82f6", icon: "⚡", expanded: isPipe, onClick: () => toggleGroup("pipe") } });
 
     // Edges from project to groups
