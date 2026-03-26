@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
 } from "recharts";
 import { cn } from "@/lib/utils";
-import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo } from "./types";
+import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo, GlobalAoInfo } from "./types";
 
 const STATUS_COLORS: Record<string, string> = {
   running: "#22c55e", stopped: "#6b7280", crashed: "#ef4444", offline: "#374151",
@@ -16,17 +17,36 @@ const TASK_COLORS: Record<string, string> = {
   in_progress: "#a78bfa", cancelled: "#ef4444", on_hold: "#f97316",
 };
 
-interface Props { projects: FleetProject[]; events: StreamEvent[]; }
+interface Props { projects: FleetProject[]; events: StreamEvent[]; globalAoInfo?: GlobalAoInfo | null; }
 type StreamFilter =
   | { type: "all" }
   | { type: "workflow"; value: string }
   | { type: "run"; taskId?: string; workflowRef: string; label: string };
+const PROJECT_DETAIL_MAX_EVENTS = 4000;
 
 function getEventKey(event: StreamEvent, index: number) {
   return `${event.project_root ?? event.project}:${event.ts}:${event.cat}:${event.task_id ?? ""}:${event.phase_id ?? ""}:${index}`;
 }
 
-export function FleetOverview({ projects, events }: Props) {
+function getEventIdentity(event: StreamEvent) {
+  return `${event.project_root ?? event.project}:${event.ts}:${event.cat}:${event.msg}:${event.task_id ?? ""}:${event.phase_id ?? ""}:${event.workflow_ref ?? ""}`;
+}
+
+function mergeStreamEvents(existing: StreamEvent[], incoming: StreamEvent[], max: number) {
+  const merged = [...existing];
+  const seen = new Set(existing.map(getEventIdentity));
+
+  for (const event of incoming) {
+    const identity = getEventIdentity(event);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    merged.push(event);
+  }
+
+  return merged.length > max ? merged.slice(merged.length - max) : merged;
+}
+
+export function FleetOverview({ projects, events, globalAoInfo }: Props) {
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
   const selected = useMemo(
     () => projects.find((project) => project.root === selectedRoot) ?? null,
@@ -81,6 +101,8 @@ export function FleetOverview({ projects, events }: Props) {
             <KPI label="Tasks Done" value={totalDone} color="text-chart-1" />
             <KPI label="Total Tasks" value={totalTasks} color="text-primary" />
           </div>
+
+          {globalAoInfo && <GlobalAoPanel info={globalAoInfo} />}
 
           <div className="grid grid-cols-[200px_1fr] gap-5 mb-5">
             <div className="bg-card rounded-xl p-4 border border-border">
@@ -145,6 +167,140 @@ function KPI({ label, value, color }: { label: string; value: string | number; c
       <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
     </div>
   );
+}
+
+function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
+  const configuredProviders = info.providers.filter((provider) => provider.configured);
+  const templates = info.workflow_templates.slice(0, 6);
+
+  return (
+    <div className="bg-card rounded-xl p-4 border border-border mb-5">
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div>
+          <h3 className="text-xs text-muted-foreground uppercase tracking-wide font-semibold">AO Home</h3>
+          <div className="text-[11px] text-muted-foreground/60 font-mono mt-1">{info.ao_home}</div>
+        </div>
+        <div className="flex gap-2 flex-wrap justify-end">
+          <MiniStat label="Sync" value={info.sync.configured ? "On" : "Off"} tone={info.sync.configured ? "text-chart-1" : "text-chart-4"} />
+          <MiniStat label="Runner Token" value={info.agent_runner_token_configured ? "Set" : "Missing"} tone={info.agent_runner_token_configured ? "text-chart-1" : "text-muted-foreground"} />
+          <MiniStat label="Providers" value={`${configuredProviders.length}/${info.providers.length}`} tone="text-primary" />
+          <MiniStat label="Templates" value={info.workflow_templates.length} tone="text-accent" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
+          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide font-semibold mb-2">Sync</div>
+          <div className="text-sm font-semibold text-foreground">{info.sync.server ? shortUrl(info.sync.server) : "Not configured"}</div>
+          <div className="text-[11px] text-muted-foreground mt-1">
+            {info.sync.project_id ? `Project ${info.sync.project_id}` : "No linked project"}
+          </div>
+          <div className="text-[10px] text-muted-foreground/50 mt-2">
+            Last sync {info.sync.last_synced_at ? info.sync.last_synced_at : "not recorded"}
+          </div>
+        </div>
+
+        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
+          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide font-semibold mb-2">Providers</div>
+          <div className="flex flex-col gap-1.5">
+            {info.providers.length === 0 ? (
+              <div className="text-[11px] text-muted-foreground">No credential providers</div>
+            ) : (
+              info.providers.slice(0, 6).map((provider) => (
+                <div key={provider.name} className="flex items-center gap-2 text-[11px] min-w-0">
+                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", provider.configured ? "bg-chart-1" : "bg-muted-foreground/30")} />
+                  <span className="font-semibold text-foreground shrink-0">{provider.name}</span>
+                  <span className="text-muted-foreground/60 truncate">{shortUrl(provider.base_url)}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
+          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide font-semibold mb-2">Global Workflows</div>
+          <div className="flex flex-col gap-2">
+            {templates.length === 0 ? (
+              <div className="text-[11px] text-muted-foreground">No shared workflow templates</div>
+            ) : (
+              templates.map((workflow) => (
+                <div key={`${workflow.source_file}:${workflow.id}`} className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-accent truncate">{workflow.id}</span>
+                    <span className="text-[9px] text-muted-foreground/40 shrink-0">{workflow.phase_count} phases</span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {workflow.name || workflow.description || workflow.source_file}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
+          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide font-semibold mb-2">Top-Level Logs</div>
+          <div className="flex flex-col gap-2">
+            {info.logs.map((log) => (
+              <div key={log.name} className="min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-foreground">{log.name}</span>
+                  <span className="text-[9px] text-muted-foreground/40 shrink-0">
+                    {log.exists ? `${formatBytes(log.size_bytes)} · ${formatTimestamp(log.modified_at_ms)}` : "missing"}
+                  </span>
+                </div>
+                {log.recent_lines.length > 0 ? (
+                  <div className="mt-1 flex flex-col gap-0.5">
+                    {log.recent_lines.map((line, index) => (
+                      <div key={`${log.name}:${index}`} className="text-[10px] text-muted-foreground/75 font-mono truncate">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-muted-foreground/50 mt-1">No recent lines</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: string | number; tone: string }) {
+  return (
+    <div className="px-2.5 py-1.5 rounded-md border border-border bg-background text-right">
+      <div className={cn("text-sm font-semibold", tone)}>{value}</div>
+      <div className="text-[9px] text-muted-foreground uppercase tracking-wide">{label}</div>
+    </div>
+  );
+}
+
+function shortUrl(value?: string) {
+  if (!value) return "Unknown";
+  try {
+    return new URL(value).host;
+  } catch {
+    return value;
+  }
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatTimestamp(value?: number) {
+  if (!value) return "unknown";
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function ProjectCard({ project: p, events, onClick }: { project: FleetProject; events: StreamEvent[]; onClick: () => void }) {
@@ -223,13 +379,100 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>(() => events.slice(-PROJECT_DETAIL_MAX_EVENTS));
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const projectEvents = useMemo(() => events, [events]);
+
+  const liveStreamParams = useMemo(() => {
+    if (streamFilter.type === "workflow") {
+      return {
+        workflow: streamFilter.value,
+        run: null,
+      };
+    }
+
+    if (streamFilter.type === "run") {
+      return {
+        workflow: streamFilter.taskId ? null : streamFilter.workflowRef,
+        run: streamFilter.taskId ?? null,
+      };
+    }
+
+    return {
+      workflow: null,
+      run: null,
+    };
+  }, [streamFilter]);
 
   useEffect(() => {
     invoke<ProjectConfig>("get_project_config", { projectRoot: p.root }).then(setConfig).catch(() => {});
     invoke<TaskInfo[]>("get_task_list", { projectRoot: p.root }).then(setTaskList).catch(() => {});
     invoke<CommitInfo[]>("get_recent_commits", { projectRoot: p.root }).then(setCommits).catch(() => {});
   }, [p.root]);
+
+  useEffect(() => {
+    setStreamEvents(events.slice(-PROJECT_DETAIL_MAX_EVENTS));
+    setStreamError(null);
+  }, [p.root]);
+
+  useEffect(() => {
+    if (viewMode !== "stream") return;
+
+    let disposed = false;
+    let activeChannelId: string | null = null;
+    let unlisten: (() => void) | null = null;
+
+    setStreamLoading(true);
+    setStreamError(null);
+    setStreamEvents([]);
+
+    const streamRequest = {
+      projectRoot: p.root,
+      workflow: liveStreamParams.workflow,
+      run: liveStreamParams.run,
+      cat: null,
+      level: levelFilter === "all" ? null : levelFilter,
+    };
+
+    const connect = async () => {
+      try {
+        const channelId = await invoke<string>("start_filtered_stream", streamRequest);
+        if (disposed) {
+          await invoke("stop_filtered_stream", { channelId }).catch(() => {});
+          return;
+        }
+
+        activeChannelId = channelId;
+
+        unlisten = await listen<StreamEvent>(channelId, (event) => {
+          setStreamEvents((prev) => mergeStreamEvents(prev, [event.payload], PROJECT_DETAIL_MAX_EVENTS));
+        });
+
+        const recent = await invoke<StreamEvent[]>("get_filtered_events", streamRequest);
+        if (disposed) return;
+        setStreamEvents((prev) => mergeStreamEvents(recent, prev, PROJECT_DETAIL_MAX_EVENTS));
+      } catch (error) {
+        if (!disposed) {
+          setStreamError(String(error));
+        }
+      } finally {
+        if (!disposed) {
+          setStreamLoading(false);
+        }
+      }
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+      if (activeChannelId) {
+        invoke("stop_filtered_stream", { channelId: activeChannelId }).catch(() => {});
+      }
+    };
+  }, [levelFilter, liveStreamParams, p.root, viewMode]);
 
   const workflowRefs = useMemo(() => {
     const refs = new Map<string, { count: number; active: boolean }>();
@@ -252,20 +495,14 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
 
   const filtered = useMemo(() => {
     const query = textFilter.trim().toLowerCase();
-    return projectEvents.filter((event) => {
-      if (levelFilter !== "all" && event.level !== levelFilter) return false;
+    return streamEvents.filter((event) => {
       if (query) {
         const haystack = `${event.msg} ${event.cat}`.toLowerCase();
         if (!haystack.includes(query)) return false;
       }
-      if (streamFilter.type === "workflow" && event.workflow_ref !== streamFilter.value) return false;
-      if (streamFilter.type === "run") {
-        if (streamFilter.taskId) return event.task_id === streamFilter.taskId;
-        return event.workflow_ref === streamFilter.workflowRef;
-      }
       return true;
     });
-  }, [levelFilter, projectEvents, streamFilter, textFilter]);
+  }, [streamEvents, textFilter]);
 
   useEffect(() => {
     if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: "auto" });
@@ -412,6 +649,12 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
               {streamFilter.type === "all" ? "ALL" : streamFilter.type === "run" ? streamFilter.label : streamFilter.value?.toUpperCase()}
             </span>
             <span className="text-[10px] text-muted-foreground/40">{filtered.length} events</span>
+            <span className={cn(
+              "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+              streamLoading ? "bg-accent/10 text-accent" : streamError ? "bg-chart-5/10 text-chart-5" : "bg-chart-1/10 text-chart-1"
+            )}>
+              {streamLoading ? "syncing" : streamError ? "stream error" : "live"}
+            </span>
             <div className="flex-1" />
             <input
               placeholder="Filter..."
@@ -432,8 +675,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
           </div>
 
           <div ref={logRef} onScroll={handleLogScroll} className="flex-1 overflow-auto px-3 py-1 font-mono text-[11px] leading-4">
-            {filtered.length === 0 ? (
-              <div className="text-muted-foreground/30 p-5 text-center">No events matching filter</div>
+            {streamError ? (
+              <div className="p-5 text-center text-xs text-chart-5">{streamError}</div>
+            ) : filtered.length === 0 ? (
+              <div className="text-muted-foreground/30 p-5 text-center">{streamLoading ? "Connecting to live stream..." : "No events matching filter"}</div>
             ) : (
               filtered.map((e, i) => (
                 <div key={getEventKey(e, i)} className={cn(

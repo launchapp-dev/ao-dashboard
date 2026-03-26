@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -89,10 +89,56 @@ struct AoSessionStore {
 #[derive(Default)]
 struct StreamRegistry {
     active_projects: Arc<AsyncMutex<HashSet<String>>>,
+    next_filtered_id: AtomicU64,
+    filtered_streams: Arc<Mutex<HashMap<String, Arc<AsyncMutex<tokio::process::Child>>>>>,
 }
 
 const STREAM_TAIL_LINES: &str = "250";
 const FILTERED_STREAM_TAIL_LINES: &str = "400";
+
+fn build_filtered_stream_args(
+    project_root: &str,
+    workflow: Option<&str>,
+    run: Option<&str>,
+    cat: Option<&str>,
+    level: Option<&str>,
+    tail_lines: &str,
+    follow: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "daemon".to_string(),
+        "stream".to_string(),
+        "--project-root".to_string(),
+        project_root.to_string(),
+        "--json".to_string(),
+        "--tail".to_string(),
+        tail_lines.to_string(),
+    ];
+
+    if let Some(value) = workflow.filter(|value| !value.is_empty()) {
+        args.push("--workflow".to_string());
+        args.push(value.to_string());
+    } else if let Some(value) = run.filter(|value| !value.is_empty()) {
+        args.push("--run".to_string());
+        args.push(value.to_string());
+    }
+
+    if let Some(value) = cat.filter(|value| !value.is_empty()) {
+        args.push("--cat".to_string());
+        args.push(value.to_string());
+    }
+
+    if let Some(value) = level.filter(|value| !value.is_empty() && *value != "all") {
+        args.push("--level".to_string());
+        args.push(value.to_string());
+    }
+
+    if !follow {
+        args.push("--no-follow".to_string());
+    }
+
+    args
+}
 
 fn ao_binary() -> String {
     let home = dirs::home_dir().unwrap_or_default();
@@ -103,10 +149,179 @@ fn ao_binary() -> String {
     "ao".to_string()
 }
 
+fn ao_home_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("no home dir")?;
+    Ok(home.join(".ao"))
+}
+
+fn read_json_value(path: &Path) -> Option<serde_json::Value> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn file_modified_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(since_epoch.as_millis() as u64)
+}
+
+fn sanitize_log_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.contains("api_key")
+        || lowered.contains("authorization:")
+        || lowered.contains("bearer ")
+        || lowered.contains(" token")
+        || lowered.starts_with("token")
+        || trimmed.contains("sk-")
+    {
+        return Some("[redacted sensitive log line]".to_string());
+    }
+
+    let mut value = trimmed.to_string();
+    if value.len() > 180 {
+        value.truncate(177);
+        value.push_str("...");
+    }
+    Some(value)
+}
+
+fn read_recent_lines(path: &Path, count: usize) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    content
+        .lines()
+        .rev()
+        .filter_map(sanitize_log_line)
+        .take(count)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoSyncInfo {
+    pub configured: bool,
+    pub server: Option<String>,
+    pub project_id: Option<String>,
+    pub last_synced_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoProviderInfo {
+    pub name: String,
+    pub base_url: Option<String>,
+    pub configured: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoWorkflowTemplateInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub phase_count: usize,
+    pub source_file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoLogInfo {
+    pub name: String,
+    pub path: String,
+    pub exists: bool,
+    pub size_bytes: u64,
+    pub modified_at_ms: Option<u64>,
+    pub recent_lines: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GlobalAoInfo {
+    pub ao_home: String,
+    pub agent_runner_token_configured: bool,
+    pub sync: AoSyncInfo,
+    pub providers: Vec<AoProviderInfo>,
+    pub workflow_templates: Vec<AoWorkflowTemplateInfo>,
+    pub logs: Vec<AoLogInfo>,
+}
+
+fn load_global_workflow_templates(workflows_dir: &Path) -> Vec<AoWorkflowTemplateInfo> {
+    let Ok(entries) = std::fs::read_dir(workflows_dir) else {
+        return Vec::new();
+    };
+
+    let mut templates = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_yaml::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(workflows) = value.get("workflows").and_then(|w| w.as_array()) else {
+            continue;
+        };
+
+        for workflow in workflows {
+            let Some(id) = workflow.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+
+            let phase_count = workflow
+                .get("phases")
+                .and_then(|v| v.as_array())
+                .map(|phases| phases.len())
+                .unwrap_or(0);
+
+            templates.push(AoWorkflowTemplateInfo {
+                id: id.to_string(),
+                name: workflow
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                description: workflow
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                phase_count,
+                source_file: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string()),
+            });
+        }
+    }
+
+    templates.sort_by(|a, b| a.id.cmp(&b.id));
+    templates
+}
+
+fn summarize_log_file(path: &Path, name: &str) -> AoLogInfo {
+    let metadata = std::fs::metadata(path).ok();
+    AoLogInfo {
+        name: name.to_string(),
+        path: path.to_string_lossy().to_string(),
+        exists: metadata.is_some(),
+        size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+        modified_at_ms: file_modified_ms(path),
+        recent_lines: read_recent_lines(path, 3),
+    }
+}
+
 #[tauri::command]
 async fn discover_projects() -> Result<Vec<Project>, String> {
-    let home = dirs::home_dir().ok_or("no home dir")?;
-    let ao_dir = home.join(".ao");
+    let ao_dir = ao_home_dir()?;
     let mut projects = Vec::new();
     let mut seen_roots = std::collections::HashSet::new();
 
@@ -155,6 +370,76 @@ async fn discover_projects() -> Result<Vec<Project>, String> {
     Ok(projects)
 }
 
+#[tauri::command]
+async fn get_global_ao_info() -> Result<GlobalAoInfo, String> {
+    let ao_dir = ao_home_dir()?;
+    let config = read_json_value(&ao_dir.join("config.json")).unwrap_or_default();
+    let sync = read_json_value(&ao_dir.join("sync.json")).unwrap_or_default();
+    let credentials = read_json_value(&ao_dir.join("credentials.json")).unwrap_or_default();
+
+    let agent_runner_token_configured = config
+        .get("agent_runner_token")
+        .and_then(|v| v.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    let sync_server = sync
+        .get("server")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let sync_token_configured = sync
+        .get("token")
+        .and_then(|v| v.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    let mut providers = credentials
+        .get("providers")
+        .and_then(|v| v.as_object())
+        .map(|providers_map| {
+            providers_map
+                .iter()
+                .map(|(name, value)| AoProviderInfo {
+                    name: name.clone(),
+                    base_url: value
+                        .get("base_url")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    configured: value
+                        .get("api_key")
+                        .and_then(|v| v.as_str())
+                        .map(|api_key| !api_key.trim().is_empty())
+                        .unwrap_or(false),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    providers.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(GlobalAoInfo {
+        ao_home: ao_dir.to_string_lossy().to_string(),
+        agent_runner_token_configured,
+        sync: AoSyncInfo {
+            configured: sync_server.is_some() && sync_token_configured,
+            server: sync_server,
+            project_id: sync
+                .get("project_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            last_synced_at: sync
+                .get("last_synced_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        },
+        providers,
+        workflow_templates: load_global_workflow_templates(&ao_dir.join("workflows")),
+        logs: vec![
+            summarize_log_file(&ao_dir.join("monitor.log"), "monitor.log"),
+            summarize_log_file(&ao_dir.join("cleanup.log"), "cleanup.log"),
+        ],
+    })
+}
+
 async fn run_ao_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> {
     let mut command = Command::new(ao_binary());
     command
@@ -174,6 +459,49 @@ async fn run_ao_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> 
         Ok(Ok(output)) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("timeout".to_string()),
+    }
+}
+
+fn extract_ao_error(envelope: &serde_json::Value, stdout: &str) -> String {
+    envelope["error"]["message"]
+        .as_str()
+        .or_else(|| envelope["error"].as_str())
+        .map(String::from)
+        .unwrap_or_else(|| stdout.trim().to_string())
+}
+
+async fn run_ao_json_cmd(args: &[String], timeout_secs: u64) -> Result<serde_json::Value, String> {
+    let mut command = Command::new(ao_binary());
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+
+    let child = command.spawn().map_err(|e| e.to_string())?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| "timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "failed to parse AO json output: {e}: {}",
+            stdout.lines().next().unwrap_or("")
+        )
+    })?;
+
+    if envelope["ok"].as_bool().unwrap_or(false) {
+        Ok(envelope
+            .get("data")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
+    } else {
+        Err(extract_ao_error(&envelope, &stdout))
     }
 }
 
@@ -566,16 +894,61 @@ async fn get_recent_events(project_root: String) -> Result<Vec<StreamEvent>, Str
         .unwrap_or_default();
 
     let output = Command::new(ao_binary())
-        .args([
-            "daemon",
-            "stream",
-            "--project-root",
-            &project_root,
-            "--json",
-            "--tail",
-            STREAM_TAIL_LINES,
-            "--no-follow",
-        ])
+        .args(
+            build_filtered_stream_args(
+                &project_root,
+                None,
+                None,
+                None,
+                None,
+                STREAM_TAIL_LINES,
+                false,
+            )
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        )
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut events = Vec::new();
+
+    for line in stdout.lines() {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            events.push(parse_stream_event(&project_name, &project_root, &val));
+        }
+    }
+
+    Ok(events)
+}
+
+#[tauri::command]
+async fn get_filtered_events(
+    project_root: String,
+    workflow: Option<String>,
+    run: Option<String>,
+    cat: Option<String>,
+    level: Option<String>,
+) -> Result<Vec<StreamEvent>, String> {
+    let project_name = PathBuf::from(&project_root)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let args = build_filtered_stream_args(
+        &project_root,
+        workflow.as_deref(),
+        run.as_deref(),
+        cat.as_deref(),
+        level.as_deref(),
+        FILTERED_STREAM_TAIL_LINES,
+        false,
+    );
+
+    let output = Command::new(ao_binary())
+        .args(args.iter().map(String::as_str).collect::<Vec<_>>())
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -764,6 +1137,7 @@ fn parse_stream_event(
 #[tauri::command]
 async fn start_filtered_stream(
     app: tauri::AppHandle,
+    streams: tauri::State<'_, StreamRegistry>,
     project_root: String,
     workflow: Option<String>,
     run: Option<String>,
@@ -775,40 +1149,21 @@ async fn start_filtered_stream(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let stream_project_root = project_root.clone();
-
-    let mut args = vec![
-        "daemon".to_string(),
-        "stream".to_string(),
-        "--project-root".to_string(),
-        project_root,
-        "--json".to_string(),
-        "--tail".to_string(),
-        FILTERED_STREAM_TAIL_LINES.to_string(),
-    ];
-
-    let channel_id = if let Some(ref wf) = workflow {
-        args.push("--workflow".to_string());
-        args.push(wf.clone());
-        format!("filtered-stream:{project_name}:wf:{wf}")
-    } else if let Some(ref r) = run {
-        args.push("--run".to_string());
-        args.push(r.clone());
-        format!("filtered-stream:{project_name}:run:{r}")
-    } else {
-        format!("filtered-stream:{project_name}:all")
-    };
-
-    if let Some(ref c) = cat {
-        args.push("--cat".to_string());
-        args.push(c.clone());
-    }
-    if let Some(ref l) = level {
-        args.push("--level".to_string());
-        args.push(l.clone());
-    }
+    let stream_id = streams.next_filtered_id.fetch_add(1, Ordering::Relaxed);
+    let channel_id = format!("filtered-stream:{project_name}:{stream_id}");
+    let args = build_filtered_stream_args(
+        &project_root,
+        workflow.as_deref(),
+        run.as_deref(),
+        cat.as_deref(),
+        level.as_deref(),
+        FILTERED_STREAM_TAIL_LINES,
+        true,
+    );
 
     let ao = ao_binary();
     let ch = channel_id.clone();
+    let filtered_streams = streams.filtered_streams.clone();
     tokio::spawn(async move {
         let mut command = Command::new(&ao);
         command
@@ -817,7 +1172,7 @@ async fn start_filtered_stream(
             .stderr(Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = match command.spawn() {
+        let child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("filtered stream error for {project_name}: {e}");
@@ -825,7 +1180,22 @@ async fn start_filtered_stream(
             }
         };
 
-        if let Some(stdout) = child.stdout.take() {
+        let child = Arc::new(AsyncMutex::new(child));
+
+        {
+            let mut entries = match filtered_streams.lock() {
+                Ok(entries) => entries,
+                Err(_) => return,
+            };
+            entries.insert(ch.clone(), child.clone());
+        }
+
+        let stdout = {
+            let mut guard = child.lock().await;
+            guard.stdout.take()
+        };
+
+        if let Some(stdout) = stdout {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -835,9 +1205,36 @@ async fn start_filtered_stream(
                 }
             }
         }
+
+        if let Ok(mut entries) = filtered_streams.lock() {
+            entries.remove(&ch);
+        }
     });
 
     Ok(channel_id)
+}
+
+#[tauri::command]
+async fn stop_filtered_stream(
+    streams: tauri::State<'_, StreamRegistry>,
+    channel_id: String,
+) -> Result<(), String> {
+    let child = {
+        let mut entries = streams
+            .filtered_streams
+            .lock()
+            .map_err(|_| "filtered stream registry poisoned".to_string())?;
+        entries.remove(&channel_id)
+    };
+
+    let Some(child) = child else {
+        return Ok(());
+    };
+
+    let mut guard = child.lock().await;
+    guard.kill().await.map_err(|e| e.to_string())?;
+    let _ = guard.wait().await;
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1068,6 +1465,24 @@ pub struct TaskInfo {
     pub priority: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TaskCreatePayload {
+    pub title: String,
+    pub description: Option<String>,
+    pub task_type: Option<String>,
+    pub priority: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TaskUpdatePayload {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub priority: Option<String>,
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+}
+
 #[tauri::command]
 async fn get_task_list(project_root: String) -> Result<Vec<TaskInfo>, String> {
     let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 10).await?;
@@ -1081,6 +1496,294 @@ async fn get_task_list(project_root: String) -> Result<Vec<TaskInfo>, String> {
             priority: t["priority"].as_str().unwrap_or("medium").to_string(),
         })
         .collect())
+}
+
+#[tauri::command]
+async fn list_tasks_full(
+    project_root: String,
+    prioritized: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let subcommand = if prioritized.unwrap_or(false) {
+        "prioritized"
+    } else {
+        "list"
+    };
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            subcommand.to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn get_task_detail(project_root: String, id: String) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "get".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+            "--id".to_string(),
+            id,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn get_task_stats(project_root: String) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "stats".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn get_next_task(project_root: String) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "next".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn create_task(
+    project_root: String,
+    payload: TaskCreatePayload,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "task".to_string(),
+        "create".to_string(),
+        "--json".to_string(),
+        "--project-root".to_string(),
+        project_root,
+        "--title".to_string(),
+        payload.title,
+    ];
+    if let Some(description) = payload.description.filter(|value| !value.trim().is_empty()) {
+        args.push("--description".to_string());
+        args.push(description);
+    }
+    if let Some(task_type) = payload.task_type.filter(|value| !value.trim().is_empty()) {
+        args.push("--task-type".to_string());
+        args.push(task_type);
+    }
+    if let Some(priority) = payload.priority.filter(|value| !value.trim().is_empty()) {
+        args.push("--priority".to_string());
+        args.push(priority);
+    }
+    run_ao_json_cmd(&args, 15).await
+}
+
+#[tauri::command]
+async fn update_task_detail(
+    project_root: String,
+    payload: TaskUpdatePayload,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "task".to_string(),
+        "update".to_string(),
+        "--json".to_string(),
+        "--project-root".to_string(),
+        project_root,
+        "--id".to_string(),
+        payload.id,
+    ];
+    if let Some(title) = payload.title.filter(|value| !value.trim().is_empty()) {
+        args.push("--title".to_string());
+        args.push(title);
+    }
+    if let Some(description) = payload.description {
+        args.push("--description".to_string());
+        args.push(description);
+    }
+    if let Some(priority) = payload.priority.filter(|value| !value.trim().is_empty()) {
+        args.push("--priority".to_string());
+        args.push(priority);
+    }
+    if let Some(status) = payload.status.filter(|value| !value.trim().is_empty()) {
+        args.push("--status".to_string());
+        args.push(status);
+    }
+    if let Some(assignee) = payload.assignee.filter(|value| !value.trim().is_empty()) {
+        args.push("--assignee".to_string());
+        args.push(assignee);
+    }
+    run_ao_json_cmd(&args, 15).await
+}
+
+#[tauri::command]
+async fn set_task_status(
+    project_root: String,
+    id: String,
+    status: String,
+) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+            "--id".to_string(),
+            id,
+            "--status".to_string(),
+            status,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn assign_task(
+    project_root: String,
+    id: String,
+    assignee: String,
+    assignee_type: Option<String>,
+    agent_role: Option<String>,
+    model: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "task".to_string(),
+        "assign".to_string(),
+        "--json".to_string(),
+        "--project-root".to_string(),
+        project_root,
+        "--id".to_string(),
+        id,
+        "--assignee".to_string(),
+        assignee,
+    ];
+    if let Some(value) = assignee_type.filter(|value| !value.trim().is_empty()) {
+        args.push("--type".to_string());
+        args.push(value);
+    }
+    if let Some(value) = agent_role.filter(|value| !value.trim().is_empty()) {
+        args.push("--agent-role".to_string());
+        args.push(value);
+    }
+    if let Some(value) = model.filter(|value| !value.trim().is_empty()) {
+        args.push("--model".to_string());
+        args.push(value);
+    }
+    run_ao_json_cmd(&args, 15).await
+}
+
+#[tauri::command]
+async fn set_task_priority(
+    project_root: String,
+    id: String,
+    priority: String,
+) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "set-priority".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+            "--id".to_string(),
+            id,
+            "--priority".to_string(),
+            priority,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_task_deadline(
+    project_root: String,
+    id: String,
+    deadline: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "task".to_string(),
+        "set-deadline".to_string(),
+        "--json".to_string(),
+        "--project-root".to_string(),
+        project_root,
+        "--id".to_string(),
+        id,
+    ];
+    if let Some(value) = deadline.filter(|value| !value.trim().is_empty()) {
+        args.push("--deadline".to_string());
+        args.push(value);
+    }
+    run_ao_json_cmd(&args, 15).await
+}
+
+#[tauri::command]
+async fn add_task_checklist_item(
+    project_root: String,
+    id: String,
+    description: String,
+) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "checklist-add".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+            "--id".to_string(),
+            id,
+            "--description".to_string(),
+            description,
+        ],
+        15,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn update_task_checklist_item(
+    project_root: String,
+    id: String,
+    item_id: String,
+    completed: bool,
+) -> Result<serde_json::Value, String> {
+    run_ao_json_cmd(
+        &[
+            "task".to_string(),
+            "checklist-update".to_string(),
+            "--json".to_string(),
+            "--project-root".to_string(),
+            project_root,
+            "--id".to_string(),
+            id,
+            "--item-id".to_string(),
+            item_id,
+            "--completed".to_string(),
+            completed.to_string(),
+        ],
+        15,
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1132,16 +1835,31 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             discover_projects,
+            get_global_ao_info,
             get_health,
             get_all_health,
             start_stream,
             get_recent_events,
+            get_filtered_events,
             get_workflows,
             get_task_summary,
             get_fleet_data,
             start_filtered_stream,
+            stop_filtered_stream,
             get_project_config,
             get_task_list,
+            list_tasks_full,
+            get_task_detail,
+            get_task_stats,
+            get_next_task,
+            create_task,
+            update_task_detail,
+            set_task_status,
+            assign_task,
+            set_task_priority,
+            set_task_deadline,
+            add_task_checklist_item,
+            update_task_checklist_item,
             get_recent_commits,
             get_ao_help,
             start_ao_session,
