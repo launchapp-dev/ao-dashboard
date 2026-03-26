@@ -20,10 +20,16 @@ const nodeTypes = {
   schedule: ScheduleNode, group: GroupNode, agent: AgentNode, mcp: McpNode,
 };
 
-const e = (id: string, src: string, tgt: string, anim = false, color = "#333"): Edge => ({
+const FLOW_COLORS = {
+  active: "#6d83a6",
+  muted: "#465063",
+  border: "#2f3745",
+};
+
+const e = (id: string, src: string, tgt: string, anim = false, color = FLOW_COLORS.muted): Edge => ({
   id, source: src, target: tgt, animated: anim, type: "smoothstep",
   style: { stroke: color, strokeWidth: 1.5 },
-  markerEnd: { type: MarkerType.ArrowClosed, color: color === "#333" ? "#444" : color, width: 10, height: 10 },
+  markerEnd: { type: MarkerType.ArrowClosed, color, width: 10, height: 10 },
 });
 
 function cronToHuman(cron: string): string {
@@ -187,19 +193,19 @@ export function FleetFlow({ health, events, projects }: Props) {
     const hubY = (startY: number, layout: { totalH: number }) => startY + layout.totalH / 2 - ROW / 2;
 
     nodes.push({ id: "g-mcp", type: "group", position: { x: COL_MCP_GROUP, y: hubY(mcpStartY, mcpLayout) },
-      data: { label: "MCP Servers", count: mcpServers.size, color: "#22c55e", icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
+      data: { label: "MCP Servers", count: mcpServers.size, color: FLOW_COLORS.border, icon: "🔌", expanded: isMcp, onClick: () => toggleGroup("mcp") } });
     nodes.push({ id: "g-agent", type: "group", position: { x: COL_AGENT_GROUP, y: hubY(agentStartY, agentLayout) },
-      data: { label: "Agents", count: cfg.agents.length, color: "#a78bfa", icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
+      data: { label: "Agents", count: cfg.agents.length, color: FLOW_COLORS.border, icon: "🤖", expanded: isAgent, onClick: () => toggleGroup("agent") } });
     nodes.push({ id: "g-sched", type: "group", position: { x: COL_SCHED_GROUP, y: hubY(schedStartY, schedLayout) },
-      data: { label: "Schedules", count: cfg.schedules.length, color: "#eab308", icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
+      data: { label: "Schedules", count: cfg.schedules.length, color: FLOW_COLORS.border, icon: "⏱", expanded: isSched, onClick: () => toggleGroup("sched") } });
     nodes.push({ id: "g-pipe", type: "group", position: { x: COL_PIPE_GROUP, y: hubY(pipeStartY, pipeLayout) },
-      data: { label: "Pipelines", count: taskWfs.length, color: "#3b82f6", icon: "⚡", expanded: isPipe, onClick: () => toggleGroup("pipe") } });
+      data: { label: "Pipelines", count: taskWfs.length, color: FLOW_COLORS.border, icon: "⚡", expanded: isPipe, onClick: () => toggleGroup("pipe") } });
 
     // Edges from project to groups
-    edges.push(e("ep-mcp", "g-mcp", "proj", false, "#22c55e40"));
-    edges.push(e("ep-agent", "g-agent", "proj", false, "#a78bfa40"));
-    edges.push(e("ep-sched", "proj", "g-sched", false, "#eab30840"));
-    edges.push(e("ep-pipe", "proj", "g-pipe", false, "#3b82f640"));
+    edges.push(e("ep-mcp", "g-mcp", "proj", false, FLOW_COLORS.border));
+    edges.push(e("ep-agent", "g-agent", "proj", false, FLOW_COLORS.border));
+    edges.push(e("ep-sched", "proj", "g-sched", false, FLOW_COLORS.border));
+    edges.push(e("ep-pipe", "proj", "g-pipe", false, FLOW_COLORS.border));
 
     // MCP SERVERS
     if (isMcp) {
@@ -207,7 +213,7 @@ export function FleetFlow({ health, events, projects }: Props) {
         const y = mcpStartY + mcpLayout.positions[i];
         const id = `mcp-${name}`;
         nodes.push({ id, type: "mcp", position: { x: COL_MCP, y }, data: { name, usedBy, expanded: expandedNodes.has(id), onToggle: () => toggleNode(id) } });
-        edges.push(e(`eg-${id}`, id, "g-mcp", false, "#22c55e30"));
+        edges.push(e(`eg-${id}`, id, "g-mcp", false, FLOW_COLORS.border));
       });
     }
 
@@ -218,25 +224,26 @@ export function FleetFlow({ health, events, projects }: Props) {
         const id = `agent-${a.name}`;
         nodes.push({ id, type: "agent", position: { x: COL_AGENT, y },
           data: { name: a.name, model: a.model, tool: a.tool, mcp_servers: a.mcp_servers, usedIn: agentPhaseMap.get(a.name) || [], system_prompt: a.system_prompt, expanded: expandedNodes.has(id), onToggle: () => toggleNode(id) } });
-        edges.push(e(`eg-${id}`, id, "g-agent", false, "#a78bfa30"));
+        edges.push(e(`eg-${id}`, id, "g-agent", false, FLOW_COLORS.border));
       });
     }
 
     // Helper to render workflow chain
-    const renderWf = (wf: typeof cfg.workflows[0], y: number, groupId: string, groupColor: string) => {
+    const renderWf = (wf: typeof cfg.workflows[0], y: number, groupId: string) => {
       const wfId = `wf-${wf.id}`;
       const isActive = activeWorkflows.some((aw) => aw.projectRoot === proj.root && aw.workflowRef === wf.id);
       const activePhase = activeWorkflows.find((aw) => aw.projectRoot === proj.root && aw.workflowRef === wf.id)?.currentPhase;
       const schedule = cfg.schedules.find((s) => s.workflow_ref === wf.id);
+      const edgeColor = isActive ? FLOW_COLORS.active : FLOW_COLORS.border;
 
       if (schedule) {
         const schedId = `sched-${schedule.id}`;
         nodes.push({ id: schedId, type: "schedule", position: { x: COL_SCHED, y },
           data: { id: schedule.id, cron: schedule.cron, humanCron: cronToHuman(schedule.cron), enabled: schedule.enabled, workflow_ref: schedule.workflow_ref } });
-        edges.push(e(`egs-${schedId}`, groupId, schedId, false, `${groupColor}40`));
-        edges.push(e(`es-${schedId}`, schedId, wfId, isActive, isActive ? groupColor : `${groupColor}30`));
+        edges.push(e(`egs-${schedId}`, groupId, schedId, false, FLOW_COLORS.border));
+        edges.push(e(`es-${schedId}`, schedId, wfId, isActive, edgeColor));
       } else {
-        edges.push(e(`egp-${wfId}`, groupId, wfId, isActive, isActive ? groupColor : `${groupColor}30`));
+        edges.push(e(`egp-${wfId}`, groupId, wfId, isActive, edgeColor));
       }
 
       nodes.push({ id: wfId, type: "workflow", position: { x: COL_WF, y },
@@ -251,20 +258,20 @@ export function FleetFlow({ health, events, projects }: Props) {
         nodes.push({ id: phaseId, type: "phase", position: { x: COL_PHASE + pi * PHASE_W, y },
           data: { phase: pid, index: `${pi + 1}/${wf.phases.length}`, workflowRef: wf.id, mode: phase?.mode || "agent", agent: phase?.agent, command: phase?.command, command_args: phase?.command_args, directive: phase?.directive, model: agentCfg?.model, isActive: isCurrentPhase, timeout_secs: phase?.timeout_secs, cwd_mode: phase?.cwd_mode, expanded: expandedNodes.has(phaseId), onToggle: () => toggleNode(phaseId) } });
 
-        if (pi === 0) edges.push(e(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive));
-        else edges.push(e(`ec-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase));
+        if (pi === 0) edges.push(e(`e-${wfId}-${phaseId}`, wfId, phaseId, isActive, edgeColor));
+        else edges.push(e(`ec-${phaseId}`, `ph-${wf.id}-${wf.phases[pi - 1]}-${pi - 1}`, phaseId, isCurrentPhase, isCurrentPhase ? FLOW_COLORS.active : FLOW_COLORS.border));
 
       });
     };
 
     // SCHEDULED WORKFLOWS
     if (isSched) {
-      scheduledWfs.forEach((wf, i) => renderWf(wf, schedStartY + schedLayout.positions[i], "g-sched", "#eab308"));
+      scheduledWfs.forEach((wf, i) => renderWf(wf, schedStartY + schedLayout.positions[i], "g-sched"));
     }
 
     // TASK PIPELINES
     if (isPipe) {
-      taskWfs.forEach((wf, i) => renderWf(wf, pipeStartY + pipeLayout.positions[i], "g-pipe", "#3b82f6"));
+      taskWfs.forEach((wf, i) => renderWf(wf, pipeStartY + pipeLayout.positions[i], "g-pipe"));
     }
 
     return { nodes, edges };
@@ -279,9 +286,16 @@ export function FleetFlow({ health, events, projects }: Props) {
           return (
             <div key={p.root} onClick={() => setSelectedProject(p.root)}
               className={cn("text-[10px] px-1.5 py-1 rounded cursor-pointer mb-0.5 flex items-center gap-1.5",
-                selectedProject === p.root ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:text-foreground"
+                selectedProject === p.root ? "bg-primary/12 text-foreground" : "text-muted-foreground hover:text-foreground"
               )}>
-              <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", ph?.status === "running" ? "bg-chart-1" : "bg-muted-foreground/30")} />
+              <span className={cn(
+                "w-1.5 h-1.5 rounded-full shrink-0",
+                ph?.status === "crashed"
+                  ? "bg-chart-5"
+                  : ph?.status === "running"
+                    ? "bg-chart-1"
+                    : "bg-muted-foreground/30"
+              )} />
               {p.name}
             </div>
           );
@@ -294,7 +308,7 @@ export function FleetFlow({ health, events, projects }: Props) {
           proOptions={{ hideAttribution: true }}
           key={selectedProject}
         >
-          <Background color="#222" gap={24} />
+          <Background color="#242b36" gap={24} />
           <Controls />
         </ReactFlow>
       </div>

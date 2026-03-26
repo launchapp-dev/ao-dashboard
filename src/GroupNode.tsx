@@ -20,13 +20,13 @@ export function GroupNode({ data }: Props) {
         "rounded-lg px-4 py-2.5 min-w-[130px] font-sans border cursor-pointer transition-colors",
         data.expanded ? "bg-card" : "bg-secondary/50"
       )}
-      style={{ borderColor: `${data.color}${data.expanded ? "60" : "30"}` }}
+      style={{ borderColor: data.expanded ? "#465063" : "#374151" }}
     >
       <Handle type="target" position={Position.Left} style={{ background: data.color }} />
 
       <div className="flex items-center gap-2">
         <span className="text-sm">{data.icon}</span>
-        <span className="font-bold text-xs uppercase tracking-wide" style={{ color: data.color }}>{data.label}</span>
+        <span className="font-bold text-xs uppercase tracking-wide text-foreground">{data.label}</span>
         <span className="text-[10px] text-muted-foreground/40 font-mono">{data.count}</span>
         <span className="text-[10px] text-muted-foreground/30 ml-1">{data.expanded ? "▾" : "▸"}</span>
       </div>

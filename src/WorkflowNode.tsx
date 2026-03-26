@@ -26,7 +26,7 @@ export function WorkflowNode({ data }: Props) {
   const { workflow: wf, onClick } = data;
 
   const isRunning = wf.status === "running";
-  const color = isRunning ? "#3b82f6" : "#555";
+  const color = isRunning ? "#6d83a6" : "#465063";
 
   return (
     <div
@@ -39,7 +39,7 @@ export function WorkflowNode({ data }: Props) {
         expanded ? "min-w-[220px]" : "min-w-[180px]"
       )}
       style={{
-        background: isRunning ? "#16162a" : "hsl(225 35% 7%)",
+        background: isRunning ? "rgba(109, 131, 166, 0.08)" : "hsl(220 16% 11%)",
         border: `1.5px solid ${color}`,
         padding: "8px 14px",
       }}
@@ -48,13 +48,13 @@ export function WorkflowNode({ data }: Props) {
 
       <div className="flex items-center gap-1.5 mb-1">
         {isRunning && <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
-        {wf.isScheduled && !isRunning && <span className="text-[9px] text-chart-4">⏱</span>}
+        {wf.isScheduled && !isRunning && <span className="text-[9px] text-muted-foreground">⏱</span>}
         <span className="font-semibold text-xs text-foreground">{wf.workflowRef}</span>
         {wf.phaseCount && <span className="text-[9px] text-muted-foreground/40">{wf.phaseCount}p</span>}
       </div>
 
       {wf.currentPhase && (
-        <div className="text-[11px] text-muted-foreground">→ <span className="text-accent">{wf.currentPhase}</span></div>
+        <div className="text-[11px] text-muted-foreground">→ <span className="text-foreground">{wf.currentPhase}</span></div>
       )}
 
       {wf.cron && <div className="text-[9px] text-muted-foreground/40 font-mono">{wf.cron}</div>}
@@ -64,12 +64,12 @@ export function WorkflowNode({ data }: Props) {
           {wf.name && <div className="text-muted-foreground mb-0.5">{wf.name}</div>}
           {wf.description && <div className="text-muted-foreground/50 mb-1">{wf.description}</div>}
           <div className="text-muted-foreground/40">
-            <span className="text-muted-foreground/60">Status:</span> <span className={isRunning ? "text-chart-1" : "text-muted-foreground/40"}>{wf.status}</span>
+            <span className="text-muted-foreground/60">Status:</span> <span className={isRunning ? "text-primary" : "text-muted-foreground/40"}>{wf.status}</span>
           </div>
           {wf.phases && wf.phases.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {wf.phases.map((p, i) => (
-                <span key={i} className="text-[8px] px-1 py-px rounded bg-accent/10 text-accent">{i + 1}. {p}</span>
+                <span key={i} className="rounded bg-secondary px-1 py-px text-[8px] text-muted-foreground">{i + 1}. {p}</span>
               ))}
             </div>
           )}

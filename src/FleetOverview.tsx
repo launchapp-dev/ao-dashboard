@@ -9,12 +9,20 @@ import { cn } from "@/lib/utils";
 import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo, GlobalAoInfo } from "./types";
 
 const STATUS_COLORS: Record<string, string> = {
-  running: "#22c55e", stopped: "#6b7280", crashed: "#ef4444", offline: "#374151",
+  running: "#5d9a80",
+  stopped: "#5a6474",
+  crashed: "#b85c5c",
+  offline: "#465063",
 };
 
 const TASK_COLORS: Record<string, string> = {
-  done: "#22c55e", ready: "#3b82f6", backlog: "#6b7280", blocked: "#eab308",
-  in_progress: "#a78bfa", cancelled: "#ef4444", on_hold: "#f97316",
+  done: "#9fb0c9",
+  ready: "#6d83a6",
+  backlog: "#465063",
+  blocked: "#c3893d",
+  in_progress: "#7f95b4",
+  cancelled: "#b85c5c",
+  on_hold: "#8c6b3d",
 };
 
 interface Props { projects: FleetProject[]; events: StreamEvent[]; globalAoInfo?: GlobalAoInfo | null; }
@@ -94,12 +102,12 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
       {!selected ? (
         <>
           <div className="grid grid-cols-6 gap-3 mb-5">
-            <KPI label="Projects" value={projects.length} color="text-primary" />
-            <KPI label="Agents" value={`${totalAgents}/${totalPool}`} color="text-chart-1" />
-            <KPI label="Workflows" value={totalWorkflows} color="text-accent" />
-            <KPI label="Queued" value={totalQueue} color={totalQueue > 20 ? "text-chart-4" : "text-muted-foreground"} />
-            <KPI label="Tasks Done" value={totalDone} color="text-chart-1" />
-            <KPI label="Total Tasks" value={totalTasks} color="text-primary" />
+            <KPI label="Projects" value={projects.length} />
+            <KPI label="Agents" value={`${totalAgents}/${totalPool}`} />
+            <KPI label="Workflows" value={totalWorkflows} />
+            <KPI label="Queued" value={totalQueue} tone={totalQueue > 20 ? "warning" : "default"} />
+            <KPI label="Tasks Done" value={totalDone} />
+            <KPI label="Total Tasks" value={totalTasks} />
           </div>
 
           {globalAoInfo && <GlobalAoPanel info={globalAoInfo} />}
@@ -112,7 +120,7 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
                   <Pie data={statusData} dataKey="value" cx="50%" cy="50%" innerRadius={30} outerRadius={55}>
                     {statusData.map((d) => (<Cell key={d.name} fill={STATUS_COLORS[d.name] || "#333"} />))}
                   </Pie>
-                  <Tooltip contentStyle={{ background: "hsl(225 35% 7%)", border: "1px solid hsl(225 20% 15%)", borderRadius: 6 }} />
+                  <Tooltip contentStyle={{ background: "hsl(220 16% 11%)", border: "1px solid hsl(220 14% 22%)", borderRadius: 8 }} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="flex gap-2 justify-center flex-wrap">
@@ -125,9 +133,9 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
               <h3 className="text-xs text-muted-foreground mb-2 uppercase tracking-wide font-semibold">Task Distribution</h3>
               <ResponsiveContainer width="100%" height={170}>
                 <BarChart data={taskBarData} barSize={16}>
-                  <XAxis dataKey="name" tick={{ fill: "#666", fontSize: 10 }} />
-                  <YAxis tick={{ fill: "#666", fontSize: 10 }} />
-                  <Tooltip contentStyle={{ background: "hsl(225 35% 7%)", border: "1px solid hsl(225 20% 15%)", borderRadius: 6, fontSize: 12 }} />
+                  <XAxis dataKey="name" tick={{ fill: "#8b93a3", fontSize: 10 }} />
+                  <YAxis tick={{ fill: "#8b93a3", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "hsl(220 16% 11%)", border: "1px solid hsl(220 14% 22%)", borderRadius: 8, fontSize: 12 }} />
                   <Bar dataKey="done" stackId="a" fill={TASK_COLORS.done} />
                   <Bar dataKey="ready" stackId="a" fill={TASK_COLORS.ready} />
                   <Bar dataKey="in_progress" stackId="a" fill={TASK_COLORS.in_progress} />
@@ -160,10 +168,20 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
   );
 }
 
-function KPI({ label, value, color }: { label: string; value: string | number; color: string }) {
+function KPI({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "default" | "warning" | "critical";
+}) {
+  const valueClass = tone === "warning" ? "text-chart-4" : tone === "critical" ? "text-chart-5" : "text-foreground";
+
   return (
-    <div className="bg-card rounded-lg p-3 border-l-[3px] border-border" style={{ borderLeftColor: "currentColor" }}>
-      <div className={cn("text-xl font-bold", color)}>{value}</div>
+    <div className="bg-card rounded-lg border border-border p-3">
+      <div className={cn("text-xl font-bold", valueClass)}>{value}</div>
       <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
     </div>
   );
@@ -183,8 +201,8 @@ function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
         <div className="flex gap-2 flex-wrap justify-end">
           <MiniStat label="Sync" value={info.sync.configured ? "On" : "Off"} tone={info.sync.configured ? "text-chart-1" : "text-chart-4"} />
           <MiniStat label="Runner Token" value={info.agent_runner_token_configured ? "Set" : "Missing"} tone={info.agent_runner_token_configured ? "text-chart-1" : "text-muted-foreground"} />
-          <MiniStat label="Providers" value={`${configuredProviders.length}/${info.providers.length}`} tone="text-primary" />
-          <MiniStat label="Templates" value={info.workflow_templates.length} tone="text-accent" />
+          <MiniStat label="Providers" value={`${configuredProviders.length}/${info.providers.length}`} tone="text-foreground" />
+          <MiniStat label="Templates" value={info.workflow_templates.length} tone="text-foreground" />
         </div>
       </div>
 
@@ -226,7 +244,7 @@ function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
               templates.map((workflow) => (
                 <div key={`${workflow.source_file}:${workflow.id}`} className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-semibold text-accent truncate">{workflow.id}</span>
+                    <span className="text-[11px] font-semibold text-foreground truncate">{workflow.id}</span>
                     <span className="text-[9px] text-muted-foreground/40 shrink-0">{workflow.phase_count} phases</span>
                   </div>
                   <div className="text-[10px] text-muted-foreground truncate">
@@ -311,24 +329,23 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
   return (
     <div
       onClick={onClick}
-      className="bg-card rounded-lg p-3.5 cursor-pointer border transition-colors hover:border-primary/50"
-      style={{ borderColor: `${color}40` }}
+      className="bg-card rounded-lg border border-border p-3.5 cursor-pointer transition-colors hover:border-primary/35"
     >
       <div className="flex justify-between items-center mb-2">
         <span className="font-bold text-[13px] text-foreground">{p.name}</span>
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: color, color: "#000" }}>{status}</span>
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: `${color}24`, color }}>{status}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
         <div><span className="text-muted-foreground">agents </span><span className="font-semibold">{p.health?.active_agents || 0}/{p.health?.pool_size || 0}</span></div>
         <div><span className="text-muted-foreground">queue </span><span className={cn("font-semibold", (p.health?.queued_tasks || 0) > 10 && "text-chart-4")}>{p.health?.queued_tasks || 0}</span></div>
-        <div><span className="text-muted-foreground">wf </span><span className="font-semibold text-accent">{p.workflows.length}</span></div>
+        <div><span className="text-muted-foreground">wf </span><span className="font-semibold">{p.workflows.length}</span></div>
       </div>
 
       <div className="h-[3px] bg-secondary rounded-full overflow-hidden mb-1.5">
         <div className="h-full transition-all duration-500" style={{
           width: `${p.health?.pool_utilization_percent || 0}%`,
-          background: (p.health?.pool_utilization_percent || 0) > 80 ? "#22c55e" : "#3b82f6",
+          background: (p.health?.pool_utilization_percent || 0) > 80 ? "#c3893d" : "#6d83a6",
         }} />
       </div>
 
@@ -337,7 +354,7 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
           {p.workflows.slice(0, 2).map((wf, i) => (
             <div key={`${wf.id}:${i}`} className="flex gap-1 items-center">
               <span className="w-[5px] h-[5px] rounded-full bg-primary inline-block animate-pulse" />
-              <span className="text-accent">{wf.workflow_ref}</span>
+              <span className="text-foreground">{wf.workflow_ref}</span>
               <span className="text-muted-foreground/50">→ {wf.current_phase}</span>
             </div>
           ))}
@@ -517,14 +534,14 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const tabBtn = (mode: typeof viewMode, label: string, extra?: string) => (
     <button onClick={() => setViewMode(mode)} className={cn(
       "px-3 py-1 rounded text-[11px] border transition-colors cursor-pointer",
-      viewMode === mode ? "bg-primary/20 border-primary/40 text-foreground" : "bg-transparent border-border text-muted-foreground hover:text-foreground"
+      viewMode === mode ? "bg-primary/12 border-primary/40 text-foreground" : "bg-transparent border-border text-muted-foreground hover:text-foreground"
     )}>{label}{extra || ""}</button>
   );
 
   const sidebarItem = (label: string, count: number, active: boolean, onClick: () => void, dot?: string) => (
     <div onClick={onClick} className={cn(
       "flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-[11px]",
-      active ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:text-foreground"
+      active ? "bg-primary/12 text-foreground" : "text-muted-foreground hover:text-foreground"
     )}>
       {dot && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} />}
       <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
@@ -535,23 +552,24 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
       <div className="shrink-0 px-5 pt-3">
-        <button onClick={onBack} className="mb-3 px-3 py-1.5 rounded border border-border text-muted-foreground text-xs cursor-pointer hover:text-foreground hover:border-primary/40 transition-colors">
+        <button onClick={onBack} className="mb-3 px-3 py-1.5 rounded border border-border text-muted-foreground text-xs cursor-pointer hover:text-foreground hover:border-primary/30 transition-colors">
           ← Back to Fleet
         </button>
 
         <div className="flex items-center gap-3 mb-3">
           <h2 className="text-xl font-bold">{p.name}</h2>
           <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded" style={{
-            background: STATUS_COLORS[p.health?.status || "offline"], color: "#000",
+            background: `${STATUS_COLORS[p.health?.status || "offline"]}24`,
+            color: STATUS_COLORS[p.health?.status || "offline"],
           }}>{p.health?.status || "offline"}</span>
         </div>
 
         <div className="grid grid-cols-5 gap-2.5 mb-3">
-          <KPI label="Agents" value={`${p.health?.active_agents || 0}/${p.health?.pool_size || 0}`} color="text-chart-1" />
-          <KPI label="Queue" value={p.health?.queued_tasks || 0} color="text-chart-4" />
-          <KPI label="Workflows" value={p.workflows.length} color="text-accent" />
-          <KPI label="Tasks Done" value={p.tasks?.done || 0} color="text-chart-1" />
-          <KPI label="Total Tasks" value={p.tasks?.total || 0} color="text-primary" />
+          <KPI label="Agents" value={`${p.health?.active_agents || 0}/${p.health?.pool_size || 0}`} />
+          <KPI label="Queue" value={p.health?.queued_tasks || 0} tone={(p.health?.queued_tasks || 0) > 10 ? "warning" : "default"} />
+          <KPI label="Workflows" value={p.workflows.length} />
+          <KPI label="Tasks Done" value={p.tasks?.done || 0} />
+          <KPI label="Total Tasks" value={p.tasks?.total || 0} />
         </div>
 
         {p.tasks && (
@@ -586,7 +604,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
       ) : (
       <div className="flex-1 grid grid-cols-[180px_minmax(0,1fr)] gap-2.5 px-5 pb-3 min-h-0 overflow-hidden">
         <div className="bg-card rounded-lg p-2.5 overflow-auto min-w-0 border border-border">
-          {sidebarItem("All Events", projectEvents.length, streamFilter.type === "all", () => setStreamFilter({ type: "all" }), "#3b82f6")}
+          {sidebarItem("All Events", projectEvents.length, streamFilter.type === "all", () => setStreamFilter({ type: "all" }), "#6d83a6")}
 
           {workflowRefs.size > 0 && (
             <>
@@ -594,7 +612,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
               {[...workflowRefs].map(([ref, { count, active }]) =>
                 sidebarItem(ref, count, streamFilter.type === "workflow" && streamFilter.value === ref,
                   () => setStreamFilter({ type: "workflow", value: ref }),
-                  active ? "#22c55e" : "#6b7280")
+                  active ? "#5d9a80" : "#5a6474")
               )}
             </>
           )}
@@ -604,7 +622,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
               <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Models</div>
               {[...modelNames].map(([name, count]) => (
                 <div key={name} className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-muted-foreground">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary/60 shrink-0" />
                   <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{name.replace("kimi-code/", "")}</span>
                   <span className="text-[9px] text-muted-foreground/50">{count}</span>
                 </div>
@@ -626,12 +644,12 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
                   })}
                   className={cn(
                     "px-2 py-1 text-[10px] cursor-pointer rounded",
-                    streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "bg-primary/15" : ""
+                    streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "bg-primary/12" : ""
                   )}
                 >
                   <div className="flex items-center gap-1">
                     <span className="w-[5px] h-[5px] rounded-full bg-primary animate-pulse" />
-                    <span className="text-accent font-semibold">{wf.workflow_ref}</span>
+                    <span className="font-semibold text-foreground">{wf.workflow_ref}</span>
                   </div>
                   <div className="text-muted-foreground/50 pl-[9px]">
                     {wf.current_phase} ({wf.phase_progress})
@@ -651,7 +669,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
             <span className="text-[10px] text-muted-foreground/40">{filtered.length} events</span>
             <span className={cn(
               "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-              streamLoading ? "bg-accent/10 text-accent" : streamError ? "bg-chart-5/10 text-chart-5" : "bg-chart-1/10 text-chart-1"
+              streamLoading ? "bg-primary/12 text-primary" : streamError ? "bg-chart-5/10 text-chart-5" : "bg-chart-1/10 text-chart-1"
             )}>
               {streamLoading ? "syncing" : streamError ? "stream error" : "live"}
             </span>
@@ -682,16 +700,17 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
             ) : (
               filtered.map((e, i) => (
                 <div key={getEventKey(e, i)} className={cn(
-                  "flex gap-2 py-px",
-                  e.level === "error" ? "text-chart-5" : e.level === "warn" ? "text-chart-4" : "text-muted-foreground"
+                  "flex gap-2 py-px text-foreground/86",
+                  e.level === "error" && "border-l border-l-chart-5 pl-1",
+                  e.level === "warn" && "border-l border-l-chart-4 pl-1"
                 )}>
                   <span className="text-muted-foreground/30 min-w-[55px] shrink-0">{e.ts.slice(11, 19)}</span>
                   <span className="text-muted-foreground/50 min-w-[90px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap">{e.cat}</span>
                   {e.workflow_ref && (
                     <span onClick={() => setStreamFilter({ type: "workflow", value: e.workflow_ref! })}
-                      className="text-accent shrink-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{e.workflow_ref}</span>
+                      className="text-primary shrink-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{e.workflow_ref}</span>
                   )}
-                  {e.phase_id && <span className="text-primary shrink-0 text-[10px]">{e.phase_id}</span>}
+                  {e.phase_id && <span className="text-muted-foreground shrink-0 text-[10px]">{e.phase_id}</span>}
                   {e.model && <span className="text-muted-foreground/40 shrink-0 text-[10px]">{e.model.replace("kimi-code/", "")}</span>}
                   <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{e.msg}</span>
                 </div>
@@ -706,10 +725,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   );
 }
 
-const PRIORITY_COLORS: Record<string, string> = { critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "#6b7280" };
+const PRIORITY_COLORS: Record<string, string> = { critical: "#b85c5c", high: "#c3893d", medium: "#8b93a3", low: "#6b7280" };
 const TASK_STATUS_COLORS: Record<string, string> = {
-  done: "#22c55e", ready: "#3b82f6", "in-progress": "#a78bfa", in_progress: "#a78bfa",
-  blocked: "#eab308", backlog: "#6b7280", cancelled: "#ef4444", "on-hold": "#f97316", on_hold: "#f97316",
+  done: "#9fb0c9", ready: "#6d83a6", "in-progress": "#7f95b4", in_progress: "#7f95b4",
+  blocked: "#c3893d", backlog: "#5a6474", cancelled: "#b85c5c", "on-hold": "#8c6b3d", on_hold: "#8c6b3d",
 };
 
 function TasksView({ tasks }: { tasks: TaskInfo[] }) {
@@ -722,13 +741,13 @@ function TasksView({ tasks }: { tasks: TaskInfo[] }) {
     <div className="flex-1 overflow-auto px-5 pb-3">
       <div className="flex gap-2 mb-2.5 flex-wrap items-center">
         <span onClick={() => setStatusFilter("all")}
-          className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === "all" ? "bg-primary/15 border-primary/40 text-foreground" : "bg-card border-border text-muted-foreground")}>
+          className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === "all" ? "bg-primary/12 border-primary/40 text-foreground" : "bg-card border-border text-muted-foreground")}>
           All ({tasks.length})
         </span>
         {[...statuses].sort((a, b) => b[1] - a[1]).map(([status, count]) => (
           <span key={status} onClick={() => setStatusFilter(statusFilter === status ? "all" : status)}
-            className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === status ? "bg-primary/15" : "bg-card")}
-            style={{ color: TASK_STATUS_COLORS[status] || "#888", borderColor: statusFilter === status ? (TASK_STATUS_COLORS[status] || "#333") : "hsl(225 20% 15%)" }}>
+            className={cn("text-[10px] px-2 py-0.5 rounded cursor-pointer border", statusFilter === status ? "bg-primary/12 text-foreground" : "bg-card")}
+            style={{ color: status === "blocked" || status === "cancelled" ? TASK_STATUS_COLORS[status] || "#888" : "#cdd5df", borderColor: statusFilter === status ? (TASK_STATUS_COLORS[status] || "#333") : "hsl(220 14% 22%)" }}>
             {status} ({count})
           </span>
         ))}
@@ -739,7 +758,7 @@ function TasksView({ tasks }: { tasks: TaskInfo[] }) {
             style={{ borderLeftColor: TASK_STATUS_COLORS[t.status] || "#333", borderLeftWidth: 3 }}>
             <span className="text-[10px] font-bold text-muted-foreground min-w-[65px] font-mono">{t.id}</span>
             <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold min-w-[60px] text-center"
-              style={{ background: `${TASK_STATUS_COLORS[t.status] || "#333"}20`, color: TASK_STATUS_COLORS[t.status] || "#888" }}>{t.status}</span>
+              style={{ background: `${TASK_STATUS_COLORS[t.status] || "#333"}1a`, color: t.status === "blocked" || t.status === "cancelled" ? TASK_STATUS_COLORS[t.status] || "#888" : "#d8dee7" }}>{t.status}</span>
             <span className="text-[9px] px-1 py-0.5 rounded" style={{ color: PRIORITY_COLORS[t.priority] || "#666" }}>{t.priority}</span>
             <span className="text-[11px] text-foreground flex-1">{t.title}</span>
           </div>
@@ -756,7 +775,7 @@ function CommitsView({ commits }: { commits: CommitInfo[] }) {
       <div className="bg-card rounded-lg p-3 border border-border">
         {commits.map((c, i) => (
           <div key={i} className="flex gap-2.5 py-1 border-b border-border/50 text-[11px] font-mono">
-            <span className="text-chart-4 min-w-[60px] shrink-0">{c.hash}</span>
+            <span className="text-primary min-w-[60px] shrink-0">{c.hash}</span>
             <span className="text-muted-foreground min-w-[80px] shrink-0 text-[9px]">{c.date.slice(0, 10)}</span>
             <span className="text-foreground flex-1">{c.message}</span>
           </div>
@@ -788,19 +807,18 @@ function ConfigView({ config }: { config: ProjectConfig }) {
         <div className="bg-card rounded-lg p-3 border border-border">
           <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Workflows ({config.workflows.length})</h3>
           {config.workflows.map((wf) => (
-            <div key={wf.id} className="mb-2.5 p-2 bg-background rounded border-l-[3px] border-accent">
+            <div key={wf.id} className="mb-2.5 p-2 bg-background rounded border border-border">
               <div className="flex items-center gap-1.5 mb-0.5">
-                <span className="font-semibold text-xs text-accent">{wf.id}</span>
-                {wf.name && <span className="text-[10px] text-muted-foreground">— {wf.name}</span>}
+                <span className="font-semibold text-xs text-foreground">{wf.id}</span>
+                {wf.name && <span className="text-[10px] text-muted-foreground">- {wf.name}</span>}
               </div>
               {wf.description && <div className="text-[10px] text-muted-foreground/50 mb-1">{wf.description}</div>}
               <div className="flex gap-1 flex-wrap">
                 {wf.phases.map((pid, i) => {
-                  const phase = config.phases.find((p) => p.id === pid);
                   return (
                     <span key={i} onClick={() => setExpandedPhase(expandedPhase === pid ? null : pid)}
                       className={cn("text-[9px] px-1.5 py-0.5 rounded cursor-pointer border",
-                        phase?.mode === "command" ? "bg-chart-1/10 text-chart-1 border-chart-1/20" : "bg-primary/10 text-primary border-primary/20"
+                        expandedPhase === pid ? "bg-primary/12 border-primary/30 text-foreground" : "bg-secondary border-border text-muted-foreground"
                       )}>{i + 1}. {pid}</span>
                   );
                 })}
@@ -812,16 +830,16 @@ function ConfigView({ config }: { config: ProjectConfig }) {
         <div className="bg-card rounded-lg p-3 border border-border">
           <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Schedules ({config.schedules.length})</h3>
           {config.schedules.map((s) => (
-            <div key={s.id} className={cn("p-1.5 px-2 mb-1 bg-background rounded border-l-[3px]", s.enabled ? "border-chart-4" : "border-muted-foreground/20")}>
+            <div key={s.id} className="p-1.5 px-2 mb-1 bg-background rounded border border-border">
               <div className="flex justify-between items-center">
-                <span className="text-chart-4 font-semibold text-[11px]">{s.id}</span>
+                <span className="font-semibold text-[11px] text-foreground">{s.id}</span>
                 {!s.enabled && <span className="text-[8px] text-chart-5 bg-chart-5/10 px-1 py-px rounded">disabled</span>}
               </div>
               <div className="flex justify-between mt-0.5">
                 <span className="text-[10px] text-muted-foreground">{cronToHuman(s.cron)}</span>
                 <span className="text-[9px] text-muted-foreground/40 font-mono">{s.cron}</span>
               </div>
-              <div className="text-[9px] text-accent mt-px">→ {s.workflow_ref}</div>
+              <div className="text-[9px] text-muted-foreground mt-px">→ {s.workflow_ref}</div>
             </div>
           ))}
         </div>
@@ -832,9 +850,9 @@ function ConfigView({ config }: { config: ProjectConfig }) {
           <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Agents ({config.agents.length})</h3>
           {config.agents.map((a) => (
             <div key={a.name} onClick={() => setExpandedAgent(expandedAgent === a.name ? null : a.name)}
-              className={cn("p-2 mb-1 bg-background rounded cursor-pointer border-l-[3px]", expandedAgent === a.name ? "border-primary" : "border-transparent")}>
+              className={cn("p-2 mb-1 bg-background rounded cursor-pointer border", expandedAgent === a.name ? "border-primary/30" : "border-border")}>
               <div className="flex justify-between items-center">
-                <span className="text-primary font-semibold text-[11px]">{a.name}</span>
+                <span className="text-foreground font-semibold text-[11px]">{a.name}</span>
                 <div className="flex gap-1 items-center">
                   <span className="text-[9px] text-muted-foreground">{a.model.replace("kimi-code/", "")}</span>
                   <span className="text-[9px] text-muted-foreground/40 bg-secondary px-1 py-px rounded">{a.tool}</span>
@@ -843,7 +861,7 @@ function ConfigView({ config }: { config: ProjectConfig }) {
               {a.mcp_servers.length > 0 && (
                 <div className="flex gap-1 mt-1">
                   {a.mcp_servers.map((s) => (
-                    <span key={s} className="text-[8px] px-1 py-px rounded bg-chart-1/10 text-chart-1">{s}</span>
+                    <span key={s} className="text-[8px] px-1 py-px rounded bg-secondary text-muted-foreground">{s}</span>
                   ))}
                 </div>
               )}
@@ -860,11 +878,11 @@ function ConfigView({ config }: { config: ProjectConfig }) {
           <h3 className="text-[11px] text-muted-foreground/50 uppercase tracking-wide mb-2 font-semibold">Phases ({config.phases.length})</h3>
           {config.phases.map((ph) => (
             <div key={ph.id} onClick={() => setExpandedPhase(expandedPhase === ph.id ? null : ph.id)}
-              className={cn("p-1.5 mb-0.5 bg-background rounded cursor-pointer border-l-[3px]",
-                expandedPhase === ph.id ? (ph.mode === "command" ? "border-chart-1" : "border-primary") : "border-transparent"
+              className={cn("p-1.5 mb-0.5 bg-background rounded cursor-pointer border",
+                expandedPhase === ph.id ? "border-primary/30" : "border-border"
               )}>
               <div className="flex justify-between items-center">
-                <span className={cn("font-semibold text-[10px]", ph.mode === "command" ? "text-chart-1" : "text-primary")}>{ph.id}</span>
+                <span className="font-semibold text-[10px] text-foreground">{ph.id}</span>
                 <span className="text-[9px] text-muted-foreground/30">
                   {ph.mode === "command" ? (ph.command ? `$ ${ph.command} ${ph.command_args.join(" ")}` : "cmd") : (ph.agent || "agent")}
                 </span>
@@ -873,7 +891,7 @@ function ConfigView({ config }: { config: ProjectConfig }) {
                 <div className="mt-1 text-[10px] text-muted-foreground">
                   {ph.mode === "command" && ph.command && (
                     <div className="font-mono bg-card p-1.5 rounded mb-1">
-                      <span className="text-chart-1">$ {ph.command} {ph.command_args.join(" ")}</span>
+                      <span className="text-primary">$ {ph.command} {ph.command_args.join(" ")}</span>
                       {ph.cwd_mode && <div className="text-muted-foreground/30 text-[9px]">cwd: {ph.cwd_mode}</div>}
                       {ph.timeout_secs && <div className="text-muted-foreground/30 text-[9px]">timeout: {ph.timeout_secs}s</div>}
                     </div>

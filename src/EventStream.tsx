@@ -64,14 +64,13 @@ export function EventStream({ events }: Props) {
           <div
             key={getEventKey(e, i)}
             className={cn(
-              "flex gap-2 px-4 py-0.5 border-b border-border/30 hover:bg-card",
-              e.level === "error" && "text-chart-5",
-              e.level === "warn" && "text-chart-4",
-              e.level === "info" && "text-muted-foreground"
+              "flex gap-2 border-b border-border/30 px-4 py-1 text-foreground/86 hover:bg-card/70",
+              e.level === "error" && "border-l-2 border-l-chart-5",
+              e.level === "warn" && "border-l-2 border-l-chart-4"
             )}
           >
             <span className="text-muted-foreground/50 min-w-[55px]">{e.ts.slice(11, 19)}</span>
-            <span className="text-primary min-w-[130px] font-medium">{e.project}</span>
+            <span className="min-w-[130px] font-medium text-foreground">{e.project}</span>
             <span className="text-muted-foreground min-w-[110px]">{e.cat}</span>
             <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis">{e.msg}</span>
           </div>

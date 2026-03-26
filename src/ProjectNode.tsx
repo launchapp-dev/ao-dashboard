@@ -14,25 +14,25 @@ export function ProjectNode({ data }: Props) {
   const statusColor =
     h.status === "running"
       ? h.healthy
-        ? "#22c55e"
-        : "#eab308"
+        ? "#5d9a80"
+        : "#c3893d"
       : h.status === "crashed"
-        ? "#ef4444"
-        : "#6b7280";
+        ? "#b85c5c"
+        : "#5a6474";
 
   const utilPct = h.pool_size > 0 ? (h.active_agents / h.pool_size) * 100 : 0;
 
   return (
     <div
       style={{
-        background: "#1a1a2e",
+        background: "hsl(220 16% 11%)",
         border: `2px solid ${statusColor}`,
         borderRadius: 12,
         padding: 16,
         width: 240,
         maxHeight: 180,
         overflow: "hidden",
-        color: "#e0e0e0",
+        color: "hsl(210 18% 94%)",
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
@@ -43,7 +43,7 @@ export function ProjectNode({ data }: Props) {
         <span
           style={{
             background: statusColor,
-            color: "#000",
+            color: "#111827",
             padding: "2px 8px",
             borderRadius: 4,
             fontSize: 11,
@@ -63,7 +63,7 @@ export function ProjectNode({ data }: Props) {
         </div>
         <div>
           <span style={{ color: "#888" }}>queue </span>
-          <span style={{ fontWeight: 600, color: h.queued_tasks > 10 ? "#eab308" : "inherit" }}>
+          <span style={{ fontWeight: 600, color: h.queued_tasks > 10 ? "#c3893d" : "inherit" }}>
             {h.queued_tasks}
           </span>
         </div>
@@ -73,7 +73,7 @@ export function ProjectNode({ data }: Props) {
         style={{
           marginTop: 8,
           height: 4,
-          background: "#333",
+          background: "#232a35",
           borderRadius: 2,
           overflow: "hidden",
         }}
@@ -82,7 +82,7 @@ export function ProjectNode({ data }: Props) {
           style={{
             width: `${utilPct}%`,
             height: "100%",
-            background: utilPct > 80 ? "#22c55e" : utilPct > 40 ? "#3b82f6" : "#6b7280",
+            background: utilPct > 80 ? "#c3893d" : utilPct > 40 ? "#6d83a6" : "#5a6474",
             transition: "width 0.5s ease",
           }}
         />
@@ -94,7 +94,7 @@ export function ProjectNode({ data }: Props) {
             <div
               key={i}
               style={{
-                color: e.level === "error" ? "#ef4444" : e.level === "warn" ? "#eab308" : "#666",
+                color: e.level === "error" ? "#b85c5c" : e.level === "warn" ? "#c3893d" : "#737d8c",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",

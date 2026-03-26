@@ -25,7 +25,7 @@ export function PhaseNode({ data }: Props) {
   const { phase, index, mode, agent, command, model, isActive, directive } = data;
 
   const isCommand = mode === "command";
-  const color = isActive ? "#22c55e" : isCommand ? "#38bdf8" : "#a78bfa";
+  const color = isActive ? "#6d83a6" : "#465063";
 
   return (
     <div
@@ -35,7 +35,7 @@ export function PhaseNode({ data }: Props) {
         expanded ? "min-w-[260px] max-w-[320px]" : "min-w-[160px] max-w-[220px]"
       )}
       style={{
-        background: isActive ? "#0a1a0a" : "hsl(225 35% 7%)",
+        background: isActive ? "rgba(109, 131, 166, 0.08)" : "hsl(220 16% 11%)",
         border: `1px solid ${color}${isActive ? "" : "40"}`,
         padding: "6px 10px",
       }}
@@ -43,8 +43,8 @@ export function PhaseNode({ data }: Props) {
       <Handle type="target" position={Position.Left} style={{ background: color }} />
 
       <div className="flex items-center gap-1.5">
-        {isActive && <span className="w-[5px] h-[5px] rounded-full bg-chart-1 animate-pulse" />}
-        <span className="text-[9px] px-1 py-px rounded font-semibold uppercase" style={{ background: `${color}20`, color }}>{isCommand ? "cmd" : "agent"}</span>
+        {isActive && <span className="w-[5px] h-[5px] rounded-full bg-primary animate-pulse" />}
+        <span className="rounded bg-secondary px-1 py-px text-[9px] font-semibold uppercase text-muted-foreground">{isCommand ? "cmd" : "agent"}</span>
         <span className="font-medium">{phase}</span>
         {index && <span className="text-muted-foreground/40">({index})</span>}
       </div>
@@ -52,7 +52,7 @@ export function PhaseNode({ data }: Props) {
       {(agent || command || model) && (
         <div className="mt-0.5 text-[9px] text-muted-foreground/60 overflow-hidden text-ellipsis whitespace-nowrap">
           {isCommand && command && <span className="text-primary">{command}</span>}
-          {!isCommand && agent && <span className="text-accent">{agent}</span>}
+          {!isCommand && agent && <span className="text-foreground">{agent}</span>}
           {model && <span className="text-muted-foreground/30"> · {model.replace("kimi-code/", "")}</span>}
         </div>
       )}

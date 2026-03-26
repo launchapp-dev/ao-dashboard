@@ -21,15 +21,15 @@ export function AgentNode({ data }: Props) {
     <div
       onClick={data.onToggle}
       className={cn(
-        "bg-card border border-primary/30 rounded-lg px-3 py-2 font-sans cursor-pointer transition-all",
+        "bg-card border border-border rounded-lg px-3 py-2 font-sans cursor-pointer transition-all",
         expanded ? "min-w-[280px] max-w-[400px]" : "min-w-[160px] max-w-[220px]"
       )}
     >
-      <Handle type="target" position={Position.Left} style={{ background: "#3b82f6" }} />
+      <Handle type="target" position={Position.Left} style={{ background: "#465063" }} />
 
       <div className="flex items-center gap-1.5 mb-1">
-        <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
-        <span className="font-semibold text-[11px] text-primary">{data.name}</span>
+        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 shrink-0" />
+        <span className="font-semibold text-[11px] text-foreground">{data.name}</span>
       </div>
       <div className="text-[9px] text-muted-foreground font-mono">
         {data.model.replace("kimi-code/", "")}
@@ -38,7 +38,7 @@ export function AgentNode({ data }: Props) {
       {data.mcp_servers.length > 0 && (
         <div className="flex gap-1 mt-1 flex-wrap">
           {data.mcp_servers.map((s) => (
-            <span key={s} className="text-[8px] px-1 py-px rounded bg-chart-1/10 text-chart-1">{s}</span>
+            <span key={s} className="rounded bg-secondary px-1 py-px text-[8px] text-muted-foreground">{s}</span>
           ))}
         </div>
       )}
@@ -57,7 +57,7 @@ export function AgentNode({ data }: Props) {
         </div>
       )}
 
-      <Handle type="source" position={Position.Right} style={{ background: "#3b82f6" }} />
+      <Handle type="source" position={Position.Right} style={{ background: "#465063" }} />
     </div>
   );
 }
