@@ -36,6 +36,11 @@ pub struct StreamEvent {
     pub level: String,
     pub cat: String,
     pub msg: String,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub error: Option<String>,
+    pub run_id: Option<String>,
+    pub workflow_id: Option<String>,
     pub subject_id: Option<String>,
     pub phase_id: Option<String>,
     pub task_id: Option<String>,
@@ -1112,9 +1117,17 @@ fn parse_stream_event(
     project_root: &str,
     val: &serde_json::Value,
 ) -> StreamEvent {
+    let run_id = val["run_id"].as_str().map(String::from);
+    let workflow_id = run_id
+        .as_deref()
+        .and_then(parse_workflow_id_from_run_id);
     let wf_ref = val["meta"]["workflow_ref"]
         .as_str()
         .or(val["workflow_ref"].as_str())
+        .map(String::from);
+    let tool = val["meta"]["tool"]
+        .as_str()
+        .or(val["tool"].as_str())
         .map(String::from);
     StreamEvent {
         project: project_name.to_string(),
@@ -1123,14 +1136,41 @@ fn parse_stream_event(
         level: val["level"].as_str().unwrap_or("info").to_string(),
         cat: val["cat"].as_str().unwrap_or("").to_string(),
         msg: val["msg"].as_str().unwrap_or("").to_string(),
+        role: val["role"].as_str().map(String::from),
+        content: val["content"].as_str().map(String::from),
+        error: val["error"].as_str().map(String::from),
+        run_id,
+        workflow_id,
         subject_id: val["subject_id"].as_str().map(String::from),
         phase_id: val["phase_id"].as_str().map(String::from),
         task_id: val["task_id"].as_str().map(String::from),
         workflow_ref: wf_ref,
         model: val["model"].as_str().map(String::from),
-        tool: val["tool"].as_str().map(String::from),
+        tool,
         schedule_id: val["schedule_id"].as_str().map(String::from),
         meta: val.get("meta").cloned(),
+    }
+}
+
+fn parse_workflow_id_from_run_id(run_id: &str) -> Option<String> {
+    let trimmed = run_id.strip_prefix("wf-")?;
+    if trimmed.len() < 36 {
+        return None;
+    }
+
+    let candidate = &trimmed[..36];
+    let is_uuid = candidate
+        .bytes()
+        .enumerate()
+        .all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+
+    if is_uuid {
+        Some(candidate.to_string())
+    } else {
+        None
     }
 }
 
@@ -1484,9 +1524,49 @@ pub struct TaskUpdatePayload {
 }
 
 #[tauri::command]
-async fn get_task_list(project_root: String) -> Result<Vec<TaskInfo>, String> {
-    let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 10).await?;
-    let tasks: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
+async fn get_task_list(
+    project_root: String,
+    prioritized: Option<bool>,
+    status: Option<String>,
+    priority: Option<String>,
+    search: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<TaskInfo>, String> {
+    let subcommand = if prioritized.unwrap_or(false) {
+        "prioritized"
+    } else {
+        "list"
+    };
+    let mut args = vec![
+        "task".to_string(),
+        subcommand.to_string(),
+        "--json".to_string(),
+        "--project-root".to_string(),
+        project_root,
+    ];
+    if let Some(value) = status.filter(|value| !value.trim().is_empty()) {
+        args.push("--status".to_string());
+        args.push(value);
+    }
+    if let Some(value) = priority.filter(|value| !value.trim().is_empty()) {
+        args.push("--priority".to_string());
+        args.push(value);
+    }
+    if let Some(value) = search.filter(|value| !value.trim().is_empty()) {
+        args.push("--search".to_string());
+        args.push(value);
+    }
+    if let Some(value) = limit {
+        args.push("--limit".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = offset {
+        args.push("--offset".to_string());
+        args.push(value.to_string());
+    }
+    let data = run_ao_json_cmd(&args, 15).await?;
+    let tasks = data.as_array().cloned().unwrap_or_default();
     Ok(tasks
         .iter()
         .map(|t| TaskInfo {

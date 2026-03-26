@@ -25,45 +25,52 @@ export function ProjectNode({ data }: Props) {
   return (
     <div
       style={{
-        background: "hsl(220 16% 11%)",
+        background: "linear-gradient(180deg, hsl(220 18% 13%), hsl(220 18% 10%))",
         border: `2px solid ${statusColor}`,
-        borderRadius: 12,
-        padding: 16,
-        width: 240,
-        maxHeight: 180,
+        borderRadius: 18,
+        padding: 18,
+        width: 270,
+        maxHeight: 220,
         overflow: "hidden",
         color: "hsl(210 18% 94%)",
-        fontFamily: "system-ui, -apple-system, sans-serif",
+        fontFamily: "\"Space Grotesk\", \"Avenir Next\", sans-serif",
+        boxShadow: "0 18px 36px rgba(0,0,0,0.18)",
       }}
     >
       <Handle type="target" position={Position.Left} style={{ background: statusColor }} />
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontWeight: 700, fontSize: 14 }}>{h.project}</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 10 }}>
+        <div>
+          <div style={{ color: "hsl(215 14% 72%)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.18em", marginBottom: 6 }}>Project</div>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>{h.project}</span>
+        </div>
         <span
           style={{
-            background: statusColor,
-            color: "#111827",
-            padding: "2px 8px",
-            borderRadius: 4,
-            fontSize: 11,
+            background: `${statusColor}20`,
+            color: statusColor,
+            border: `1px solid ${statusColor}55`,
+            padding: "4px 9px",
+            borderRadius: 999,
+            fontSize: 10,
             fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: "0.12em",
           }}
         >
           {h.status}
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
         <div>
-          <span style={{ color: "#888" }}>agents </span>
-          <span style={{ fontWeight: 600 }}>
+          <div style={{ color: "hsl(215 14% 72%)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 3 }}>Agents</div>
+          <span style={{ fontWeight: 700, fontSize: 14 }}>
             {h.active_agents}/{h.pool_size}
           </span>
         </div>
         <div>
-          <span style={{ color: "#888" }}>queue </span>
-          <span style={{ fontWeight: 600, color: h.queued_tasks > 10 ? "#c3893d" : "inherit" }}>
+          <div style={{ color: "hsl(215 14% 72%)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 3 }}>Queue</div>
+          <span style={{ fontWeight: 700, fontSize: 14, color: h.queued_tasks > 10 ? "#c3893d" : "inherit" }}>
             {h.queued_tasks}
           </span>
         </div>
@@ -74,7 +81,7 @@ export function ProjectNode({ data }: Props) {
           marginTop: 8,
           height: 4,
           background: "#232a35",
-          borderRadius: 2,
+          borderRadius: 999,
           overflow: "hidden",
         }}
       >
@@ -89,19 +96,20 @@ export function ProjectNode({ data }: Props) {
       </div>
 
       {events.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: 10, maxHeight: 42, overflow: "hidden" }}>
+        <div style={{ marginTop: 12, fontSize: 11, maxHeight: 58, overflow: "hidden", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 10 }}>
+          <div style={{ color: "hsl(215 14% 72%)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>Recent signals</div>
           {events.slice(-3).map((e, i) => (
             <div
               key={i}
               style={{
-                color: e.level === "error" ? "#b85c5c" : e.level === "warn" ? "#c3893d" : "#737d8c",
+                color: e.level === "error" ? "#b85c5c" : e.level === "warn" ? "#c3893d" : "#a0acbf",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                lineHeight: "14px",
+                lineHeight: "16px",
               }}
             >
-              {e.msg.slice(0, 35)}
+              {e.msg.slice(0, 48)}
             </div>
           ))}
         </div>

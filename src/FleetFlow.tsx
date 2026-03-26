@@ -278,39 +278,68 @@ export function FleetFlow({ health, events, projects }: Props) {
   }, [events, projects, configs, selectedProject, activeWorkflows, expandedGroups, expandedNodes, healthByRoot]);
 
   return (
-    <div className="w-full h-[calc(100vh-60px)] flex">
-      <div className="w-[150px] bg-background border-r border-border p-2 overflow-auto shrink-0">
-        <div className="text-[9px] text-muted-foreground/40 uppercase tracking-wide px-1.5 pb-1 font-semibold">Projects</div>
-        {projects.map((p) => {
-          const ph = healthByRoot.get(p.root);
-          return (
-            <div key={p.root} onClick={() => setSelectedProject(p.root)}
-              className={cn("text-[10px] px-1.5 py-1 rounded cursor-pointer mb-0.5 flex items-center gap-1.5",
-                selectedProject === p.root ? "bg-primary/12 text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}>
-              <span className={cn(
-                "w-1.5 h-1.5 rounded-full shrink-0",
-                ph?.status === "crashed"
-                  ? "bg-chart-5"
-                  : ph?.status === "running"
-                    ? "bg-chart-1"
-                    : "bg-muted-foreground/30"
-              )} />
-              {p.name}
-            </div>
-          );
-        })}
+    <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 lg:flex-row">
+      <div className="shrink-0 overflow-auto rounded-[24px] border border-border/80 bg-card/55 p-2 lg:w-[190px]">
+        <div className="px-2 pb-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Projects</div>
+          <div className="mt-1 text-xs text-muted-foreground">Select a workspace to center the graph.</div>
+        </div>
+        <div className="grid gap-1 lg:flex lg:flex-col">
+          {projects.map((p) => {
+            const ph = healthByRoot.get(p.root);
+            return (
+              <button
+                key={p.root}
+                type="button"
+                onClick={() => setSelectedProject(p.root)}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors",
+                  selectedProject === p.root
+                    ? "border-primary/35 bg-primary/12 text-foreground"
+                    : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-background/70 hover:text-foreground",
+                )}
+              >
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full shrink-0",
+                    ph?.status === "crashed"
+                      ? "bg-chart-5"
+                      : ph?.status === "running"
+                        ? "bg-chart-1"
+                        : "bg-muted-foreground/30",
+                  )}
+                />
+                <span className="truncate">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <div className="flex-1">
-        <ReactFlow
-          nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView
-          fitViewOptions={{ padding: 0.15 }}
-          proOptions={{ hideAttribution: true }}
-          key={selectedProject}
-        >
-          <Background color="#242b36" gap={24} />
-          <Controls />
-        </ReactFlow>
+      <div className="min-h-0 flex-1 overflow-hidden rounded-[26px] border border-border/80 bg-card/40">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border/80 bg-black/15 px-4 py-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Topology map</div>
+            <div className="mt-1 text-sm text-foreground">
+              {projects.find((project) => project.root === selectedProject)?.name ?? "Select a project"} execution path from infrastructure to phase runtime.
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            <span className="rounded-full border border-white/8 bg-background px-2.5 py-1">Left: infrastructure</span>
+            <span className="rounded-full border border-white/8 bg-background px-2.5 py-1">Center: workflow entry</span>
+            <span className="rounded-full border border-white/8 bg-background px-2.5 py-1">Right: execution chain</span>
+          </div>
+        </div>
+        <div className="h-full min-h-0">
+          <ReactFlow
+            nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView
+            fitViewOptions={{ padding: 0.15 }}
+            proOptions={{ hideAttribution: true }}
+            key={selectedProject}
+          >
+            <Background color="#242b36" gap={24} />
+            <Controls />
+          </ReactFlow>
+        </div>
       </div>
     </div>
   );

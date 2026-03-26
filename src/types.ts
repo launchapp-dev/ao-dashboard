@@ -22,6 +22,11 @@ export interface StreamEvent {
   level: string;
   cat: string;
   msg: string;
+  role?: string;
+  content?: string;
+  error?: string;
+  run_id?: string;
+  workflow_id?: string;
   subject_id?: string;
   phase_id?: string;
   task_id?: string;
@@ -106,6 +111,86 @@ export interface TaskInfo {
   priority: string;
 }
 
+export interface TaskChecklistItem {
+  id: string;
+  description: string;
+  completed: boolean;
+  [key: string]: unknown;
+}
+
+export interface TaskMetadata {
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string;
+  updated_by?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  version?: number;
+  [key: string]: unknown;
+}
+
+export interface TaskRecord {
+  id: string;
+  title: string;
+  description?: string | null;
+  type?: string | null;
+  status: string;
+  priority: string;
+  blocked_reason?: string | null;
+  risk?: string | null;
+  scope?: string | null;
+  complexity?: string | null;
+  impact_area?: string[];
+  assignee?: Record<string, unknown> | null;
+  estimated_effort?: unknown;
+  linked_requirements?: unknown[];
+  linked_architecture_entities?: unknown[];
+  dependencies?: unknown[];
+  checklist: TaskChecklistItem[];
+  tags?: string[];
+  workflow_metadata?: Record<string, unknown> | null;
+  worktree_path?: string | null;
+  branch_name?: string | null;
+  metadata?: TaskMetadata | null;
+  deadline?: string | null;
+  paused?: boolean;
+  cancelled?: boolean;
+  resource_requirements?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface TaskStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  by_type: Record<string, number>;
+  in_progress: number;
+  blocked: number;
+  completed: number;
+  stale_in_progress?: {
+    threshold_hours: number;
+    count: number;
+    tasks: TaskRecord[];
+  };
+  priority_policy?: {
+    high_budget_percent: number;
+    high_budget_limit: number;
+    total_tasks: number;
+    active_tasks: number;
+    total_by_priority: Record<string, number>;
+    active_by_priority: Record<string, number>;
+    high_budget_compliant: boolean;
+    high_budget_overflow: number;
+  };
+}
+
+export interface TaskCreatePayload {
+  title: string;
+  description?: string | null;
+  task_type?: string | null;
+  priority?: string | null;
+}
+
 export interface CommitInfo {
   hash: string;
   message: string;
@@ -148,4 +233,43 @@ export interface ProjectConfig {
   phases: PhaseConfig[];
   workflows: WorkflowConfig[];
   schedules: ScheduleConfig[];
+}
+
+export interface AoSyncInfo {
+  configured: boolean;
+  server?: string;
+  project_id?: string;
+  last_synced_at?: string;
+}
+
+export interface AoProviderInfo {
+  name: string;
+  base_url?: string;
+  configured: boolean;
+}
+
+export interface AoWorkflowTemplateInfo {
+  id: string;
+  name?: string;
+  description?: string;
+  phase_count: number;
+  source_file: string;
+}
+
+export interface AoLogInfo {
+  name: string;
+  path: string;
+  exists: boolean;
+  size_bytes: number;
+  modified_at_ms?: number;
+  recent_lines: string[];
+}
+
+export interface GlobalAoInfo {
+  ao_home: string;
+  agent_runner_token_configured: boolean;
+  sync: AoSyncInfo;
+  providers: AoProviderInfo[];
+  workflow_templates: AoWorkflowTemplateInfo[];
+  logs: AoLogInfo[];
 }

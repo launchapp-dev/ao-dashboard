@@ -1,0 +1,3 @@
+# Project-local workflow extensions and overrides.
+tools_allowlist:
+  - cargo

@@ -16,8 +16,16 @@ export function GroupNode({ data }: Props) {
   return (
     <div
       onClick={data.onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          data.onClick();
+        }
+      }}
+      role="button"
+      tabIndex={0}
       className={cn(
-        "rounded-lg px-4 py-2.5 min-w-[130px] font-sans border cursor-pointer transition-colors",
+        "min-w-[150px] rounded-[16px] border px-4 py-3 font-sans transition-colors",
         data.expanded ? "bg-card" : "bg-secondary/50"
       )}
       style={{ borderColor: data.expanded ? "#465063" : "#374151" }}
@@ -26,9 +34,9 @@ export function GroupNode({ data }: Props) {
 
       <div className="flex items-center gap-2">
         <span className="text-sm">{data.icon}</span>
-        <span className="font-bold text-xs uppercase tracking-wide text-foreground">{data.label}</span>
-        <span className="text-[10px] text-muted-foreground/40 font-mono">{data.count}</span>
-        <span className="text-[10px] text-muted-foreground/30 ml-1">{data.expanded ? "▾" : "▸"}</span>
+        <span className="font-bold text-[11px] uppercase tracking-[0.18em] text-foreground">{data.label}</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{data.count}</span>
+        <span className="ml-1 text-[10px] text-muted-foreground">{data.expanded ? "▾" : "▸"}</span>
       </div>
 
       <Handle type="source" position={Position.Right} style={{ background: data.color }} />

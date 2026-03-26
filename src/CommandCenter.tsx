@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,105 @@ const GLOBAL_SCOPE = "__global__";
 
 interface Props {
   projects: Project[];
+}
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+function parseJsonLine(line: string): JsonValue | null {
+  try {
+    return JSON.parse(line) as JsonValue;
+  } catch {
+    return null;
+  }
+}
+
+function valueSummary(value: JsonValue): string {
+  if (Array.isArray(value)) return `Array(${value.length})`;
+  if (value === null) return "null";
+  if (typeof value === "object") return `Object(${Object.keys(value).length})`;
+  if (typeof value === "string") return JSON.stringify(value);
+  return String(value);
+}
+
+function JsonLeaf({ value }: { value: JsonValue }) {
+  if (value === null) return <span className="text-muted-foreground">null</span>;
+  if (typeof value === "string") return <span className="text-chart-1">{JSON.stringify(value)}</span>;
+  if (typeof value === "number") return <span className="text-primary">{value}</span>;
+  if (typeof value === "boolean") return <span className="text-chart-4">{String(value)}</span>;
+  return null;
+}
+
+function JsonNode({
+  label,
+  value,
+  defaultOpen = false,
+}: {
+  label?: ReactNode;
+  value: JsonValue;
+  defaultOpen?: boolean;
+}) {
+  if (value === null || typeof value !== "object") {
+    return (
+      <div className="break-words">
+        {label ? <span className="mr-2 text-muted-foreground">{label}</span> : null}
+        <JsonLeaf value={value} />
+      </div>
+    );
+  }
+
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item] as const)
+    : Object.entries(value);
+  const bracketOpen = Array.isArray(value) ? "[" : "{";
+  const bracketClose = Array.isArray(value) ? "]" : "}";
+
+  return (
+    <details open={defaultOpen} className="group">
+      <summary className="cursor-pointer list-none select-none text-foreground marker:content-none">
+        <span className="mr-2 text-muted-foreground group-open:hidden">▸</span>
+        <span className="mr-2 text-muted-foreground hidden group-open:inline">▾</span>
+        {label ? <span className="mr-2 text-muted-foreground">{label}</span> : null}
+        <span className="text-foreground">{bracketOpen}</span>
+        <span className="ml-2 text-[11px] text-muted-foreground">{valueSummary(value)}</span>
+      </summary>
+      <div className="ml-6 mt-2 space-y-1 border-l border-border/60 pl-3">
+        {entries.map(([entryLabel, entryValue]) => (
+          <JsonNode
+            key={entryLabel}
+            label={
+              Array.isArray(value)
+                ? <span className="text-muted-foreground">{entryLabel}</span>
+                : <span className="text-accent">"{entryLabel}"</span>
+            }
+            value={entryValue}
+          />
+        ))}
+      </div>
+      <div className="ml-6 text-foreground">{bracketClose}</div>
+    </details>
+  );
+}
+
+function OutputEntry({ stream, line }: { stream: string; line: string }) {
+  const parsed = useMemo(() => parseJsonLine(line), [line]);
+
+  return (
+    <div
+      className={cn(
+        "border-b border-border/40 py-2",
+        stream === "stderr" ? "text-chart-4" : "text-foreground"
+      )}
+    >
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">{stream}</div>
+      {parsed === null ? (
+        <div className="whitespace-pre-wrap break-words">{line}</div>
+      ) : (
+        <div className="rounded-md border border-border bg-card/40 px-3 py-2">
+          <JsonNode value={parsed} defaultOpen />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function CommandCenter({ projects }: Props) {
@@ -130,8 +229,8 @@ export function CommandCenter({ projects }: Props) {
   };
 
   return (
-    <div className="grid h-full grid-cols-[340px_minmax(0,1fr)] overflow-hidden">
-      <aside className="border-r border-border bg-card/40">
+    <div className="grid h-full min-h-0 gap-3 p-3 sm:p-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/40">
         <div className="border-b border-border px-4 py-3">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">AO Command Center</div>
           <div className="mt-1 text-sm text-foreground">{help?.about || "Browse the installed AO CLI surface."}</div>
@@ -165,7 +264,7 @@ export function CommandCenter({ projects }: Props) {
           )}
         </div>
 
-        <div className="h-[calc(100%-140px)] overflow-auto px-2 py-2">
+        <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
           {loadingHelp ? (
             <div className="px-2 py-6 text-center text-xs text-muted-foreground">Loading commands...</div>
           ) : help?.commands.length ? (
@@ -187,12 +286,13 @@ export function CommandCenter({ projects }: Props) {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-col overflow-hidden">
-        <div className="border-b border-border bg-card px-4 py-3">
-          <div className="grid grid-cols-[200px_1fr_auto_auto] gap-2">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/35">
+        <div className="border-b border-border bg-card/70 px-4 py-3">
+          <div className="grid gap-2 2xl:grid-cols-[200px_1fr_auto_auto]">
             <select
               value={selectedProjectRoot}
               onChange={(event) => setSelectedProjectRoot(event.target.value)}
+              aria-label="Select AO command scope"
               className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
             >
               <option value={GLOBAL_SCOPE}>Global scope</option>
@@ -206,6 +306,7 @@ export function CommandCenter({ projects }: Props) {
               value={extraArgs}
               onChange={(event) => setExtraArgs(event.target.value)}
               placeholder='Extra args, for example: list --status ready or get TASK-001'
+              aria-label="Extra AO command arguments"
               className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             />
             <label className="flex items-center gap-2 rounded border border-border px-3 py-2 text-sm text-muted-foreground">
@@ -213,6 +314,7 @@ export function CommandCenter({ projects }: Props) {
                 checked={jsonMode}
                 onChange={(event) => setJsonMode(event.target.checked)}
                 type="checkbox"
+                aria-label="Run command in JSON mode"
               />
               JSON
             </label>
@@ -261,16 +363,11 @@ export function CommandCenter({ projects }: Props) {
               </div>
             ) : (
               outputLines.map((entry, index) => (
-                <div
+                <OutputEntry
                   key={`${entry.stream}-${index}`}
-                  className={cn(
-                    "whitespace-pre-wrap break-words border-b border-border/40 py-1",
-                    entry.stream === "stderr" ? "text-chart-4" : "text-foreground"
-                  )}
-                >
-                  <span className="mr-2 text-[10px] uppercase tracking-wide text-muted-foreground">{entry.stream}</span>
-                  {entry.line}
-                </div>
+                  stream={entry.stream}
+                  line={entry.line}
+                />
               ))
             )}
           </div>
@@ -281,6 +378,7 @@ export function CommandCenter({ projects }: Props) {
                 value={stdinValue}
                 onChange={(event) => setStdinValue(event.target.value)}
                 placeholder="Send stdin to the running command"
+                aria-label="Send stdin to the running command"
                 className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
               <button

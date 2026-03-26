@@ -20,38 +20,46 @@ export function AgentNode({ data }: Props) {
   return (
     <div
       onClick={data.onToggle}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          data.onToggle?.();
+        }
+      }}
+      role="button"
+      tabIndex={0}
       className={cn(
-        "bg-card border border-border rounded-lg px-3 py-2 font-sans cursor-pointer transition-all",
+        "rounded-[16px] border border-border bg-card px-3 py-3 font-sans cursor-pointer transition-all",
         expanded ? "min-w-[280px] max-w-[400px]" : "min-w-[160px] max-w-[220px]"
       )}
     >
       <Handle type="target" position={Position.Left} style={{ background: "#465063" }} />
 
-      <div className="flex items-center gap-1.5 mb-1">
+      <div className="mb-1 flex items-center gap-1.5">
         <span className="w-2 h-2 rounded-full bg-muted-foreground/50 shrink-0" />
-        <span className="font-semibold text-[11px] text-foreground">{data.name}</span>
+        <span className="font-semibold text-[12px] text-foreground">{data.name}</span>
       </div>
-      <div className="text-[9px] text-muted-foreground font-mono">
+      <div className="font-mono text-[10px] text-muted-foreground">
         {data.model.replace("kimi-code/", "")}
-        <span className="text-muted-foreground/30 ml-1">({data.tool})</span>
+        <span className="ml-1 text-muted-foreground">({data.tool})</span>
       </div>
       {data.mcp_servers.length > 0 && (
         <div className="flex gap-1 mt-1 flex-wrap">
           {data.mcp_servers.map((s) => (
-            <span key={s} className="rounded bg-secondary px-1 py-px text-[8px] text-muted-foreground">{s}</span>
+            <span key={s} className="rounded-full bg-secondary px-2 py-0.5 text-[9px] text-muted-foreground">{s}</span>
           ))}
         </div>
       )}
       {data.usedIn.length > 0 && (
-        <div className="text-[8px] text-muted-foreground/30 mt-1">
+        <div className="mt-1 text-[9px] text-muted-foreground">
           used in: {data.usedIn.slice(0, 4).join(", ")}{data.usedIn.length > 4 ? ` +${data.usedIn.length - 4}` : ""}
         </div>
       )}
 
       {expanded && data.system_prompt && (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="text-[8px] text-muted-foreground/40 uppercase tracking-wide mb-1 font-semibold">System Prompt</div>
-          <div className="font-mono bg-background/50 p-2 rounded text-[9px] text-muted-foreground/70 max-h-[180px] overflow-auto whitespace-pre-wrap leading-[13px]">
+        <div className="mt-2 border-t border-border/30 pt-2">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">System Prompt</div>
+          <div className="max-h-[180px] overflow-auto whitespace-pre-wrap rounded bg-background/50 p-2 font-mono text-[10px] leading-[14px] text-muted-foreground">
             {data.system_prompt}
           </div>
         </div>
