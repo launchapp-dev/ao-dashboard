@@ -17,6 +17,7 @@ export interface DaemonHealth {
 
 export interface StreamEvent {
   project: string;
+  project_root?: string;
   ts: string;
   level: string;
   cat: string;
@@ -109,6 +110,35 @@ export interface CommitInfo {
   hash: string;
   message: string;
   date: string;
+}
+
+export interface AoCommandInfo {
+  name: string;
+  about: string;
+}
+
+export interface AoCommandHelp {
+  path: string[];
+  about: string;
+  usage: string;
+  commands: AoCommandInfo[];
+}
+
+export interface AoSessionStarted {
+  session_id: string;
+  display_command: string;
+}
+
+export interface AoSessionOutput {
+  session_id: string;
+  stream: "stdout" | "stderr" | string;
+  line: string;
+}
+
+export interface AoSessionExit {
+  session_id: string;
+  success: boolean;
+  code: number | null;
 }
 
 export interface ProjectConfig {

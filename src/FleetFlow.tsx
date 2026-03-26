@@ -53,29 +53,35 @@ export function FleetFlow({ health, events, projects }: Props) {
   };
 
   useEffect(() => {
-    projects.forEach((p) => {
-      invoke<ProjectConfig>("get_project_config", { projectRoot: p.root })
-        .then((cfg) => setConfigs((prev) => ({ ...prev, [p.root]: cfg })))
-        .catch(() => {});
-    });
-  }, [projects]);
+    if (!selectedProject || configs[selectedProject]) return;
+    invoke<ProjectConfig>("get_project_config", { projectRoot: selectedProject })
+      .then((cfg) => setConfigs((prev) => ({ ...prev, [selectedProject]: cfg })))
+      .catch(() => {});
+  }, [configs, selectedProject]);
 
   useEffect(() => {
     if (!selectedProject && projects.length > 0) setSelectedProject(projects[0].root);
   }, [projects, selectedProject]);
 
   const activeWorkflows = useMemo(() => {
-    const wfs = new Map<string, { project: string; workflowRef: string; currentPhase: string | null }>();
+    const wfs = new Map<string, { projectRoot: string; workflowRef: string; currentPhase: string | null }>();
     for (const ev of events) {
       const wfRef = ev.workflow_ref;
       if (!wfRef) continue;
-      const key = `${ev.project}:${wfRef}`;
-      if (ev.cat === "workflow.start") wfs.set(key, { project: ev.project, workflowRef: wfRef, currentPhase: null });
+      const projectRoot = ev.project_root;
+      if (!projectRoot) continue;
+      const key = `${projectRoot}:${wfRef}`;
+      if (ev.cat === "workflow.start") wfs.set(key, { projectRoot, workflowRef: wfRef, currentPhase: null });
       else if (ev.cat === "phase.start") { const ex = wfs.get(key); if (ex) ex.currentPhase = ev.phase_id || ev.msg.split(" ")[0]; }
       else if (ev.cat === "workflow.complete") wfs.delete(key);
     }
     return Array.from(wfs.values());
   }, [events]);
+
+  const healthByRoot = useMemo(
+    () => new Map(health.map((entry) => [entry.root, entry])),
+    [health],
+  );
 
   const { nodes, edges } = useMemo(() => {
     const nodes: Node[] = [];
@@ -83,7 +89,7 @@ export function FleetFlow({ health, events, projects }: Props) {
     const proj = projects.find((p) => p.root === selectedProject);
     if (!proj) return { nodes, edges };
 
-    const h = health.find((hh) => hh.root === proj.root);
+    const h = healthByRoot.get(proj.root);
     const cfg = configs[proj.root];
     if (!cfg) return { nodes, edges };
 
@@ -173,7 +179,7 @@ export function FleetFlow({ health, events, projects }: Props) {
       id: "proj", type: "project", position: { x: COL_PROJECT, y: projY },
       data: {
         health: h || { project: proj.name, root: proj.root, status: "offline", active_agents: 0, pool_size: 0, queued_tasks: 0, daemon_pid: null, pool_utilization_percent: 0, healthy: false },
-        events: events.filter((ev) => ev.project === proj.name).slice(-3),
+        events: events.filter((ev) => ev.project_root === proj.root).slice(-3),
       },
     });
 
@@ -219,8 +225,8 @@ export function FleetFlow({ health, events, projects }: Props) {
     // Helper to render workflow chain
     const renderWf = (wf: typeof cfg.workflows[0], y: number, groupId: string, groupColor: string) => {
       const wfId = `wf-${wf.id}`;
-      const isActive = activeWorkflows.some((aw) => aw.project === proj.name && aw.workflowRef === wf.id);
-      const activePhase = activeWorkflows.find((aw) => aw.project === proj.name && aw.workflowRef === wf.id)?.currentPhase;
+      const isActive = activeWorkflows.some((aw) => aw.projectRoot === proj.root && aw.workflowRef === wf.id);
+      const activePhase = activeWorkflows.find((aw) => aw.projectRoot === proj.root && aw.workflowRef === wf.id)?.currentPhase;
       const schedule = cfg.schedules.find((s) => s.workflow_ref === wf.id);
 
       if (schedule) {
@@ -262,14 +268,14 @@ export function FleetFlow({ health, events, projects }: Props) {
     }
 
     return { nodes, edges };
-  }, [health, events, projects, configs, selectedProject, activeWorkflows, expandedGroups, expandedNodes]);
+  }, [events, projects, configs, selectedProject, activeWorkflows, expandedGroups, expandedNodes, healthByRoot]);
 
   return (
     <div className="w-full h-[calc(100vh-60px)] flex">
       <div className="w-[150px] bg-background border-r border-border p-2 overflow-auto shrink-0">
         <div className="text-[9px] text-muted-foreground/40 uppercase tracking-wide px-1.5 pb-1 font-semibold">Projects</div>
         {projects.map((p) => {
-          const ph = health.find((hh) => hh.root === p.root);
+          const ph = healthByRoot.get(p.root);
           return (
             <div key={p.root} onClick={() => setSelectedProject(p.root)}
               className={cn("text-[10px] px-1.5 py-1 rounded cursor-pointer mb-0.5 flex items-center gap-1.5",

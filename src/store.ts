@@ -5,7 +5,7 @@ let store: Awaited<ReturnType<typeof load>> | null = null;
 
 async function getStore() {
   if (!store) {
-    store = await load("fleet-cache.json");
+    store = await load("fleet-cache.json", { defaults: {}, autoSave: 200 });
   }
   return store;
 }
@@ -32,5 +32,6 @@ export async function saveCachedFleet(data: CachedFleetData): Promise<void> {
   try {
     const s = await getStore();
     await s.set("fleet", data);
+    await s.save();
   } catch {}
 }

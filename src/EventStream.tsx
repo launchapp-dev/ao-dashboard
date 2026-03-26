@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { StreamEvent } from "./types";
 
@@ -8,19 +8,35 @@ interface Props {
 
 export function EventStream({ events }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState<string>("all");
+  const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [events]);
+    if (autoScroll) {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [autoScroll, events.length]);
 
-  const filtered = events.filter((e) => {
-    if (levelFilter !== "all" && e.level !== levelFilter) return false;
-    if (filter && !e.project.includes(filter) && !e.msg.includes(filter) && !e.cat.includes(filter))
-      return false;
-    return true;
-  });
+  const filtered = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    return events.filter((event) => {
+      if (levelFilter !== "all" && event.level !== levelFilter) return false;
+      if (!query) return true;
+      const haystack = `${event.project} ${event.msg} ${event.cat}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [events, filter, levelFilter]);
+
+  const handleScroll = () => {
+    if (!logRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = logRef.current;
+    setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+  };
+
+  const getEventKey = (event: StreamEvent, index: number) =>
+    `${event.project_root ?? event.project}:${event.ts}:${event.cat}:${event.task_id ?? ""}:${event.phase_id ?? ""}:${index}`;
 
   return (
     <div className="flex flex-col h-full">
@@ -43,10 +59,10 @@ export function EventStream({ events }: Props) {
           <option value="info">Info</option>
         </select>
       </div>
-      <div className="flex-1 overflow-y-auto font-mono text-xs">
+      <div ref={logRef} onScroll={handleScroll} className="flex-1 overflow-y-auto font-mono text-xs">
         {filtered.map((e, i) => (
           <div
-            key={i}
+            key={getEventKey(e, i)}
             className={cn(
               "flex gap-2 px-4 py-0.5 border-b border-border/30 hover:bg-card",
               e.level === "error" && "text-chart-5",

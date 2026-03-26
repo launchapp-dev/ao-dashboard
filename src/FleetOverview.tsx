@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -17,9 +17,34 @@ const TASK_COLORS: Record<string, string> = {
 };
 
 interface Props { projects: FleetProject[]; events: StreamEvent[]; }
+type StreamFilter =
+  | { type: "all" }
+  | { type: "workflow"; value: string }
+  | { type: "run"; taskId?: string; workflowRef: string; label: string };
+
+function getEventKey(event: StreamEvent, index: number) {
+  return `${event.project_root ?? event.project}:${event.ts}:${event.cat}:${event.task_id ?? ""}:${event.phase_id ?? ""}:${index}`;
+}
 
 export function FleetOverview({ projects, events }: Props) {
-  const [selected, setSelected] = useState<FleetProject | null>(null);
+  const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
+  const selected = useMemo(
+    () => projects.find((project) => project.root === selectedRoot) ?? null,
+    [projects, selectedRoot],
+  );
+  const eventsByProjectRoot = useMemo(() => {
+    const grouped = new Map<string, StreamEvent[]>();
+    for (const event of events) {
+      const key = event.project_root ?? event.project;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.push(event);
+      } else {
+        grouped.set(key, [event]);
+      }
+    }
+    return grouped;
+  }, [events]);
 
   const totalAgents = projects.reduce((s, p) => s + (p.health?.active_agents || 0), 0);
   const totalPool = projects.reduce((s, p) => s + (p.health?.pool_size || 0), 0);
@@ -93,12 +118,21 @@ export function FleetOverview({ projects, events }: Props) {
 
           <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
             {projects.map((p) => (
-              <ProjectCard key={p.root} project={p} events={events} onClick={() => setSelected(p)} />
+              <ProjectCard
+                key={p.root}
+                project={p}
+                events={eventsByProjectRoot.get(p.root) ?? []}
+                onClick={() => setSelectedRoot(p.root)}
+              />
             ))}
           </div>
         </>
       ) : (
-        <ProjectDetail project={selected} events={events} onBack={() => setSelected(null)} />
+        <ProjectDetail
+          project={selected}
+          events={eventsByProjectRoot.get(selected.root) ?? []}
+          onBack={() => setSelectedRoot(null)}
+        />
       )}
     </div>
   );
@@ -116,7 +150,7 @@ function KPI({ label, value, color }: { label: string; value: string | number; c
 function ProjectCard({ project: p, events, onClick }: { project: FleetProject; events: StreamEvent[]; onClick: () => void }) {
   const status = p.health?.status || "offline";
   const color = STATUS_COLORS[status] || "#333";
-  const recentEvents = events.filter((e) => e.project === p.name).slice(-3);
+  const recentEvents = events.slice(-3);
 
   return (
     <div
@@ -145,7 +179,7 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
       {p.workflows.length > 0 && (
         <div className="text-[10px] text-muted-foreground">
           {p.workflows.slice(0, 2).map((wf, i) => (
-            <div key={i} className="flex gap-1 items-center">
+            <div key={`${wf.id}:${i}`} className="flex gap-1 items-center">
               <span className="w-[5px] h-[5px] rounded-full bg-primary inline-block animate-pulse" />
               <span className="text-accent">{wf.workflow_ref}</span>
               <span className="text-muted-foreground/50">→ {wf.current_phase}</span>
@@ -167,7 +201,7 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
       {recentEvents.length > 0 && (
         <div className="mt-1.5 text-[9px] max-h-[36px] overflow-hidden">
           {recentEvents.map((e, i) => (
-            <div key={i} className={cn(
+            <div key={getEventKey(e, i)} className={cn(
               "whitespace-nowrap overflow-hidden text-ellipsis leading-[12px]",
               e.level === "error" ? "text-chart-5" : e.level === "warn" ? "text-chart-4" : "text-muted-foreground/40"
             )}>{e.msg.slice(0, 40)}</div>
@@ -179,7 +213,7 @@ function ProjectCard({ project: p, events, onClick }: { project: FleetProject; e
 }
 
 function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; events: StreamEvent[]; onBack: () => void }) {
-  const [streamFilter, setStreamFilter] = useState<{ type: "all" | "workflow" | "run"; value?: string; label?: string }>({ type: "all" });
+  const [streamFilter, setStreamFilter] = useState<StreamFilter>({ type: "all" });
   const [levelFilter, setLevelFilter] = useState("all");
   const [textFilter, setTextFilter] = useState("");
   const [viewMode, setViewMode] = useState<"stream" | "config" | "tasks" | "commits">("stream");
@@ -189,7 +223,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const projectEvents = events.filter((e) => e.project === p.name);
+  const projectEvents = useMemo(() => events, [events]);
 
   useEffect(() => {
     invoke<ProjectConfig>("get_project_config", { projectRoot: p.root }).then(setConfig).catch(() => {});
@@ -197,32 +231,44 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
     invoke<CommitInfo[]>("get_recent_commits", { projectRoot: p.root }).then(setCommits).catch(() => {});
   }, [p.root]);
 
-  const workflowRefs = new Map<string, { count: number; active: boolean }>();
-  p.workflows.forEach((wf) => workflowRefs.set(wf.workflow_ref, { count: 0, active: true }));
-  projectEvents.forEach((e) => {
-    if (e.workflow_ref) {
-      const existing = workflowRefs.get(e.workflow_ref);
-      workflowRefs.set(e.workflow_ref, { count: (existing?.count || 0) + 1, active: existing?.active || false });
-    }
-  });
+  const workflowRefs = useMemo(() => {
+    const refs = new Map<string, { count: number; active: boolean }>();
+    p.workflows.forEach((wf) => refs.set(wf.workflow_ref, { count: 0, active: true }));
+    projectEvents.forEach((event) => {
+      if (!event.workflow_ref) return;
+      const existing = refs.get(event.workflow_ref);
+      refs.set(event.workflow_ref, { count: (existing?.count || 0) + 1, active: existing?.active || false });
+    });
+    return refs;
+  }, [p.workflows, projectEvents]);
 
-  const modelNames = new Map<string, number>();
-  projectEvents.forEach((e) => {
-    if (e.model) modelNames.set(e.model, (modelNames.get(e.model) || 0) + 1);
-  });
+  const modelNames = useMemo(() => {
+    const models = new Map<string, number>();
+    projectEvents.forEach((event) => {
+      if (event.model) models.set(event.model, (models.get(event.model) || 0) + 1);
+    });
+    return models;
+  }, [projectEvents]);
 
-  const filtered = projectEvents.filter((e) => {
-    if (levelFilter !== "all" && e.level !== levelFilter) return false;
-    if (textFilter && !e.msg.includes(textFilter) && !e.cat.includes(textFilter)) return false;
-    if (streamFilter.type === "workflow" && e.workflow_ref !== streamFilter.value) return false;
-    if (streamFilter.type === "run") {
-      if (e.subject_id !== streamFilter.value && e.workflow_ref !== streamFilter.value) return false;
-    }
-    return true;
-  });
+  const filtered = useMemo(() => {
+    const query = textFilter.trim().toLowerCase();
+    return projectEvents.filter((event) => {
+      if (levelFilter !== "all" && event.level !== levelFilter) return false;
+      if (query) {
+        const haystack = `${event.msg} ${event.cat}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      if (streamFilter.type === "workflow" && event.workflow_ref !== streamFilter.value) return false;
+      if (streamFilter.type === "run") {
+        if (streamFilter.taskId) return event.task_id === streamFilter.taskId;
+        return event.workflow_ref === streamFilter.workflowRef;
+      }
+      return true;
+    });
+  }, [levelFilter, projectEvents, streamFilter, textFilter]);
 
   useEffect(() => {
-    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: "auto" });
   }, [filtered.length, autoScroll]);
 
   const handleLogScroll = () => {
@@ -335,7 +381,12 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
               {p.workflows.map((wf) => (
                 <div
                   key={wf.id}
-                  onClick={() => setStreamFilter({ type: "run", value: wf.task_id !== "cron" ? wf.task_id : `schedule:${wf.workflow_ref}`, label: `${wf.workflow_ref} → ${wf.current_phase}` })}
+                  onClick={() => setStreamFilter({
+                    type: "run",
+                    taskId: wf.task_id !== "cron" ? wf.task_id : undefined,
+                    workflowRef: wf.workflow_ref,
+                    label: `${wf.workflow_ref} → ${wf.current_phase}`,
+                  })}
                   className={cn(
                     "px-2 py-1 text-[10px] cursor-pointer rounded",
                     streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "bg-primary/15" : ""
@@ -385,7 +436,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
               <div className="text-muted-foreground/30 p-5 text-center">No events matching filter</div>
             ) : (
               filtered.map((e, i) => (
-                <div key={i} className={cn(
+                <div key={getEventKey(e, i)} className={cn(
                   "flex gap-2 py-px",
                   e.level === "error" ? "text-chart-5" : e.level === "warn" ? "text-chart-4" : "text-muted-foreground"
                 )}>

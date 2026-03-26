@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::Emitter;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time;
+use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
@@ -28,6 +31,7 @@ pub struct DaemonHealth {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamEvent {
     pub project: String,
+    pub project_root: String,
     pub ts: String,
     pub level: String,
     pub cat: String,
@@ -41,6 +45,54 @@ pub struct StreamEvent {
     pub schedule_id: Option<String>,
     pub meta: Option<serde_json::Value>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoCommandInfo {
+    pub name: String,
+    pub about: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoCommandHelp {
+    pub path: Vec<String>,
+    pub about: String,
+    pub usage: String,
+    pub commands: Vec<AoCommandInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoSessionStarted {
+    pub session_id: String,
+    pub display_command: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoSessionOutput {
+    pub session_id: String,
+    pub stream: String,
+    pub line: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AoSessionExit {
+    pub session_id: String,
+    pub success: bool,
+    pub code: Option<i32>,
+}
+
+#[derive(Default)]
+struct AoSessionStore {
+    next_id: AtomicU64,
+    sessions: Mutex<HashMap<String, Arc<AsyncMutex<tokio::process::Child>>>>,
+}
+
+#[derive(Default)]
+struct StreamRegistry {
+    active_projects: Arc<AsyncMutex<HashSet<String>>>,
+}
+
+const STREAM_TAIL_LINES: &str = "250";
+const FILTERED_STREAM_TAIL_LINES: &str = "400";
 
 fn ao_binary() -> String {
     let home = dirs::home_dir().unwrap_or_default();
@@ -104,12 +156,14 @@ async fn discover_projects() -> Result<Vec<Project>, String> {
 }
 
 async fn run_ao_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> {
-    let child = Command::new(ao_binary())
+    let mut command = Command::new(ao_binary());
+    command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .kill_on_drop(true);
+
+    let child = command.spawn().map_err(|e| e.to_string())?;
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
@@ -121,6 +175,255 @@ async fn run_ao_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> 
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("timeout".to_string()),
     }
+}
+
+fn parse_help_output(path: Vec<String>, stdout: &str) -> AoCommandHelp {
+    let mut lines = stdout.lines();
+    let about = lines.next().unwrap_or("").trim().to_string();
+    let usage = stdout
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Usage:")
+                .map(|rest| rest.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    let mut commands = Vec::new();
+    let mut in_commands = false;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == "Commands:" {
+            in_commands = true;
+            continue;
+        }
+
+        if !in_commands {
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if !line.starts_with("  ") {
+            break;
+        }
+
+        let content = trimmed.trim_start();
+        if content.starts_with('-') {
+            break;
+        }
+
+        let mut parts = content.splitn(2, "  ");
+        let name = parts.next().unwrap_or("").trim();
+        if name.is_empty() {
+            continue;
+        }
+
+        let about = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string();
+
+        commands.push(AoCommandInfo {
+            name: name.to_string(),
+            about,
+        });
+    }
+
+    AoCommandHelp {
+        path,
+        about,
+        usage,
+        commands,
+    }
+}
+
+fn build_ao_args(
+    path: &[String],
+    project_root: Option<&str>,
+    json: bool,
+    extra_args: &[String],
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if json {
+        args.push("--json".to_string());
+    }
+    if let Some(root) = project_root.filter(|value| !value.trim().is_empty()) {
+        args.push("--project-root".to_string());
+        args.push(root.to_string());
+    }
+    args.extend(path.iter().cloned());
+    args.extend(extra_args.iter().cloned());
+    args
+}
+
+async fn emit_pipe_lines<R: tokio::io::AsyncRead + Unpin>(
+    app: tauri::AppHandle,
+    session_id: String,
+    stream: &'static str,
+    reader: R,
+) {
+    let mut lines = BufReader::new(reader).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let _ = app.emit(
+            "ao-session-output",
+            AoSessionOutput {
+                session_id: session_id.clone(),
+                stream: stream.to_string(),
+                line,
+            },
+        );
+    }
+}
+
+#[tauri::command]
+async fn get_ao_help(path: Vec<String>) -> Result<AoCommandHelp, String> {
+    let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+    args.push("--help");
+    let stdout = run_ao_cmd(&args, 10).await?;
+    Ok(parse_help_output(path, &stdout))
+}
+
+#[tauri::command]
+async fn start_ao_session(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<AoSessionStore>>,
+    path: Vec<String>,
+    project_root: Option<String>,
+    extra_args: Option<String>,
+    json: bool,
+) -> Result<AoSessionStarted, String> {
+    if path.is_empty() {
+        return Err("command path is required".to_string());
+    }
+
+    let parsed_extra = extra_args
+        .as_deref()
+        .map(|raw| shlex::split(raw).ok_or_else(|| "failed to parse extra args".to_string()))
+        .transpose()?
+        .unwrap_or_default();
+    let args = build_ao_args(&path, project_root.as_deref(), json, &parsed_extra);
+
+    let mut child = Command::new(ao_binary())
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to capture stderr".to_string())?;
+
+    let session_id = store.next_id.fetch_add(1, Ordering::Relaxed).to_string();
+    let child = Arc::new(AsyncMutex::new(child));
+
+    {
+        let mut sessions = store
+            .sessions
+            .lock()
+            .map_err(|_| "session store poisoned".to_string())?;
+        sessions.insert(session_id.clone(), child.clone());
+    }
+
+    let output_app = app.clone();
+    let output_session_id = session_id.clone();
+    tokio::spawn(async move {
+        emit_pipe_lines(output_app, output_session_id, "stdout", stdout).await;
+    });
+
+    let error_app = app.clone();
+    let error_session_id = session_id.clone();
+    tokio::spawn(async move {
+        emit_pipe_lines(error_app, error_session_id, "stderr", stderr).await;
+    });
+
+    let wait_app = app.clone();
+    let wait_session_id = session_id.clone();
+    let wait_store = store.inner().clone();
+    tokio::spawn(async move {
+        let status = {
+            let mut guard = child.lock().await;
+            guard.wait().await
+        };
+
+        if let Ok(mut sessions) = wait_store.sessions.lock() {
+            sessions.remove(&wait_session_id);
+        }
+
+        let (success, code) = match status {
+            Ok(status) => (status.success(), status.code()),
+            Err(_) => (false, None),
+        };
+
+        let _ = wait_app.emit(
+            "ao-session-exit",
+            AoSessionExit {
+                session_id: wait_session_id,
+                success,
+                code,
+            },
+        );
+    });
+
+    Ok(AoSessionStarted {
+        session_id,
+        display_command: format!("ao {}", args.join(" ")),
+    })
+}
+
+#[tauri::command]
+async fn stop_ao_session(
+    store: tauri::State<'_, Arc<AoSessionStore>>,
+    session_id: String,
+) -> Result<(), String> {
+    let child = {
+        let sessions = store
+            .sessions
+            .lock()
+            .map_err(|_| "session store poisoned".to_string())?;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| "session not found".to_string())?;
+
+    let mut guard = child.lock().await;
+    guard.kill().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn write_ao_session_stdin(
+    store: tauri::State<'_, Arc<AoSessionStore>>,
+    session_id: String,
+    input: String,
+) -> Result<(), String> {
+    let child = {
+        let sessions = store
+            .sessions
+            .lock()
+            .map_err(|_| "session store poisoned".to_string())?;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| "session not found".to_string())?;
+
+    let mut guard = child.lock().await;
+    let stdin = guard
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "stdin unavailable for session".to_string())?;
+    stdin
+        .write_all(input.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn parse_health(project_root: &str, stdout: &str) -> DaemonHealth {
@@ -146,11 +449,7 @@ fn parse_health(project_root: &str, stdout: &str) -> DaemonHealth {
 
 #[tauri::command]
 async fn get_health(project_root: String) -> Result<DaemonHealth, String> {
-    let stdout = run_ao_cmd(
-        &["daemon", "health", "--project-root", &project_root],
-        5,
-    )
-    .await?;
+    let stdout = run_ao_cmd(&["daemon", "health", "--project-root", &project_root], 5).await?;
     Ok(parse_health(&project_root, &stdout))
 }
 
@@ -194,15 +493,29 @@ async fn get_all_health(projects: Vec<Project>) -> Result<Vec<DaemonHealth>, Str
 }
 
 #[tauri::command]
-async fn start_stream(app: tauri::AppHandle, project_root: String) -> Result<(), String> {
+async fn start_stream(
+    app: tauri::AppHandle,
+    streams: tauri::State<'_, StreamRegistry>,
+    project_root: String,
+) -> Result<(), String> {
     let project_name = PathBuf::from(&project_root)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    let stream_key = project_root.clone();
+    let active_projects = streams.active_projects.clone();
+
+    {
+        let mut active = active_projects.lock().await;
+        if !active.insert(stream_key.clone()) {
+            return Ok(());
+        }
+    }
 
     let ao = ao_binary();
     tokio::spawn(async move {
-        let mut child = match Command::new(&ao)
+        let mut command = Command::new(&ao);
+        command
             .args([
                 "daemon",
                 "stream",
@@ -210,15 +523,18 @@ async fn start_stream(app: tauri::AppHandle, project_root: String) -> Result<(),
                 &project_root,
                 "--json",
                 "--tail",
-                "50",
+                STREAM_TAIL_LINES,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-        {
+            .kill_on_drop(true);
+
+        let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("stream spawn error for {project_name}: {e}");
+                let mut active = active_projects.lock().await;
+                active.remove(&stream_key);
                 return;
             }
         };
@@ -229,11 +545,14 @@ async fn start_stream(app: tauri::AppHandle, project_root: String) -> Result<(),
 
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                    let event = parse_stream_event(&project_name, &val);
+                    let event = parse_stream_event(&project_name, &project_root, &val);
                     let _ = app.emit("stream-event", &event);
                 }
             }
         }
+
+        let mut active = active_projects.lock().await;
+        active.remove(&stream_key);
     });
 
     Ok(())
@@ -254,7 +573,7 @@ async fn get_recent_events(project_root: String) -> Result<Vec<StreamEvent>, Str
             &project_root,
             "--json",
             "--tail",
-            "50",
+            STREAM_TAIL_LINES,
             "--no-follow",
         ])
         .output()
@@ -266,7 +585,7 @@ async fn get_recent_events(project_root: String) -> Result<Vec<StreamEvent>, Str
 
     for line in stdout.lines() {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            events.push(parse_stream_event(&project_name, &val));
+            events.push(parse_stream_event(&project_name, &project_root, &val));
         }
     }
 
@@ -305,8 +624,7 @@ async fn get_workflows(project_root: String) -> Result<Vec<WorkflowInfo>, String
         .unwrap_or_default();
 
     let stdout = run_ao_cmd(&["workflow", "list", "--project-root", &project_root], 5).await?;
-    let val: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).unwrap_or_default();
+    let val: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
 
     Ok(val
         .iter()
@@ -342,13 +660,18 @@ async fn get_task_summary(project_root: String) -> Result<TaskSummary, String> {
         .unwrap_or_default();
 
     let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 5).await?;
-    let tasks: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).unwrap_or_default();
+    let tasks: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
 
     let mut summary = TaskSummary {
         project: project_name,
-        backlog: 0, ready: 0, blocked: 0, done: 0,
-        cancelled: 0, on_hold: 0, in_progress: 0, total: tasks.len() as i64,
+        backlog: 0,
+        ready: 0,
+        blocked: 0,
+        done: 0,
+        cancelled: 0,
+        on_hold: 0,
+        in_progress: 0,
+        total: tasks.len() as i64,
     };
 
     for t in &tasks {
@@ -381,7 +704,12 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
             let r3 = root.clone();
 
             let (health, workflows, tasks) = tokio::join!(
-                async { run_ao_cmd(&["daemon", "health", "--project-root", &r1], 5).await.map(|s| parse_health(&r1, &s)).ok() },
+                async {
+                    run_ao_cmd(&["daemon", "health", "--project-root", &r1], 5)
+                        .await
+                        .map(|s| parse_health(&r1, &s))
+                        .ok()
+                },
                 async { get_workflows(r2).await.unwrap_or_default() },
                 async { get_task_summary(r3).await.ok() },
             );
@@ -406,13 +734,18 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "projects": fleet }))
 }
 
-fn parse_stream_event(project_name: &str, val: &serde_json::Value) -> StreamEvent {
+fn parse_stream_event(
+    project_name: &str,
+    project_root: &str,
+    val: &serde_json::Value,
+) -> StreamEvent {
     let wf_ref = val["meta"]["workflow_ref"]
         .as_str()
         .or(val["workflow_ref"].as_str())
         .map(String::from);
     StreamEvent {
         project: project_name.to_string(),
+        project_root: project_root.to_string(),
         ts: val["ts"].as_str().unwrap_or("").to_string(),
         level: val["level"].as_str().unwrap_or("info").to_string(),
         cat: val["cat"].as_str().unwrap_or("").to_string(),
@@ -441,6 +774,7 @@ async fn start_filtered_stream(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    let stream_project_root = project_root.clone();
 
     let mut args = vec![
         "daemon".to_string(),
@@ -449,7 +783,7 @@ async fn start_filtered_stream(
         project_root,
         "--json".to_string(),
         "--tail".to_string(),
-        "100".to_string(),
+        FILTERED_STREAM_TAIL_LINES.to_string(),
     ];
 
     let channel_id = if let Some(ref wf) = workflow {
@@ -476,12 +810,14 @@ async fn start_filtered_stream(
     let ao = ao_binary();
     let ch = channel_id.clone();
     tokio::spawn(async move {
-        let mut child = match Command::new(&ao)
+        let mut command = Command::new(&ao);
+        command
             .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-        {
+            .kill_on_drop(true);
+
+        let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("filtered stream error for {project_name}: {e}");
@@ -494,7 +830,7 @@ async fn start_filtered_stream(
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                    let event = parse_stream_event(&project_name, &val);
+                    let event = parse_stream_event(&project_name, &stream_project_root, &val);
                     let _ = app.emit(&ch, &event);
                 }
             }
@@ -574,14 +910,20 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
                     if let Some(obj) = val.as_object() {
                         for (k, v) in obj {
                             match (merged.get(k), v) {
-                                (Some(serde_json::Value::Object(existing)), serde_json::Value::Object(new_obj)) => {
+                                (
+                                    Some(serde_json::Value::Object(existing)),
+                                    serde_json::Value::Object(new_obj),
+                                ) => {
                                     let mut m = existing.clone();
                                     for (mk, mv) in new_obj {
                                         m.insert(mk.clone(), mv.clone());
                                     }
                                     merged.insert(k.clone(), serde_json::Value::Object(m));
                                 }
-                                (Some(serde_json::Value::Array(existing)), serde_json::Value::Array(new_arr)) => {
+                                (
+                                    Some(serde_json::Value::Array(existing)),
+                                    serde_json::Value::Array(new_arr),
+                                ) => {
                                     let mut m = existing.clone();
                                     m.extend(new_arr.iter().cloned());
                                     merged.insert(k.clone(), serde_json::Value::Array(m));
@@ -598,79 +940,112 @@ async fn get_project_config(project_root: String) -> Result<ProjectConfig, Strin
     }
 
     let agents = if let Some(serde_json::Value::Object(agents_map)) = merged.get("agents") {
-        agents_map.iter().map(|(name, val)| {
-            let mcp = val["mcp_servers"].as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            AgentConfig {
-                name: name.clone(),
-                model: val["model"].as_str().unwrap_or("default").to_string(),
-                tool: val["tool"].as_str().unwrap_or("claude").to_string(),
-                system_prompt: val["system_prompt"].as_str().map(String::from),
-                mcp_servers: mcp,
-            }
-        }).collect()
+        agents_map
+            .iter()
+            .map(|(name, val)| {
+                let mcp = val["mcp_servers"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                AgentConfig {
+                    name: name.clone(),
+                    model: val["model"].as_str().unwrap_or("default").to_string(),
+                    tool: val["tool"].as_str().unwrap_or("claude").to_string(),
+                    system_prompt: val["system_prompt"].as_str().map(String::from),
+                    mcp_servers: mcp,
+                }
+            })
+            .collect()
     } else {
         vec![]
     };
 
     let phases = if let Some(serde_json::Value::Object(phases_map)) = merged.get("phases") {
-        phases_map.iter().map(|(id, val)| {
-            let cmd_prog = val["command"]["program"].as_str().map(String::from);
-            let cmd_args = val["command"]["args"].as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            let timeout = val["command"]["timeout_secs"].as_i64()
-                .or(val["timeout_secs"].as_i64());
-            PhaseConfig {
-                id: id.clone(),
-                mode: val["mode"].as_str().unwrap_or("agent").to_string(),
-                agent: val["agent"].as_str().map(String::from),
-                directive: val["directive"].as_str().map(String::from),
-                command: cmd_prog,
-                command_args: cmd_args,
-                timeout_secs: timeout,
-                cwd_mode: val["command"]["cwd_mode"].as_str().map(String::from),
-            }
-        }).collect()
+        phases_map
+            .iter()
+            .map(|(id, val)| {
+                let cmd_prog = val["command"]["program"].as_str().map(String::from);
+                let cmd_args = val["command"]["args"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let timeout = val["command"]["timeout_secs"]
+                    .as_i64()
+                    .or(val["timeout_secs"].as_i64());
+                PhaseConfig {
+                    id: id.clone(),
+                    mode: val["mode"].as_str().unwrap_or("agent").to_string(),
+                    agent: val["agent"].as_str().map(String::from),
+                    directive: val["directive"].as_str().map(String::from),
+                    command: cmd_prog,
+                    command_args: cmd_args,
+                    timeout_secs: timeout,
+                    cwd_mode: val["command"]["cwd_mode"].as_str().map(String::from),
+                }
+            })
+            .collect()
     } else {
         vec![]
     };
 
     let mut seen_wf = std::collections::HashSet::new();
     let workflows = if let Some(serde_json::Value::Array(wf_arr)) = merged.get("workflows") {
-        wf_arr.iter().filter_map(|w| {
-            let id = w["id"].as_str()?.to_string();
-            if !seen_wf.insert(id.clone()) { return None; }
-            let phase_list = w["phases"].as_array().map(|arr| {
-                arr.iter().filter_map(|p| {
-                    p.as_str().map(String::from)
-                        .or_else(|| p["phase_ref"].as_str().map(String::from))
-                }).collect()
-            }).unwrap_or_default();
-            Some(WorkflowConfig {
-                id,
-                name: w["name"].as_str().map(String::from),
-                description: w["description"].as_str().map(String::from),
-                phases: phase_list,
+        wf_arr
+            .iter()
+            .filter_map(|w| {
+                let id = w["id"].as_str()?.to_string();
+                if !seen_wf.insert(id.clone()) {
+                    return None;
+                }
+                let phase_list = w["phases"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|p| {
+                                p.as_str()
+                                    .map(String::from)
+                                    .or_else(|| p["phase_ref"].as_str().map(String::from))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(WorkflowConfig {
+                    id,
+                    name: w["name"].as_str().map(String::from),
+                    description: w["description"].as_str().map(String::from),
+                    phases: phase_list,
+                })
             })
-        }).collect()
+            .collect()
     } else {
         vec![]
     };
 
     let mut seen_sched = std::collections::HashSet::new();
     let schedules = if let Some(serde_json::Value::Array(sched_arr)) = merged.get("schedules") {
-        sched_arr.iter().filter_map(|s| {
-            let id = s["id"].as_str()?.to_string();
-            if !seen_sched.insert(id.clone()) { return None; }
-            Some(ScheduleConfig {
-                id,
-                cron: s["cron"].as_str().unwrap_or("").to_string(),
-                workflow_ref: s["workflow_ref"].as_str().unwrap_or("").to_string(),
-                enabled: s["enabled"].as_bool().unwrap_or(true),
+        sched_arr
+            .iter()
+            .filter_map(|s| {
+                let id = s["id"].as_str()?.to_string();
+                if !seen_sched.insert(id.clone()) {
+                    return None;
+                }
+                Some(ScheduleConfig {
+                    id,
+                    cron: s["cron"].as_str().unwrap_or("").to_string(),
+                    workflow_ref: s["workflow_ref"].as_str().unwrap_or("").to_string(),
+                    enabled: s["enabled"].as_bool().unwrap_or(true),
+                })
             })
-        }).collect()
+            .collect()
     } else {
         vec![]
     };
@@ -697,12 +1072,15 @@ pub struct TaskInfo {
 async fn get_task_list(project_root: String) -> Result<Vec<TaskInfo>, String> {
     let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 10).await?;
     let tasks: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
-    Ok(tasks.iter().map(|t| TaskInfo {
-        id: t["id"].as_str().unwrap_or("").to_string(),
-        title: t["title"].as_str().unwrap_or("").to_string(),
-        status: t["status"].as_str().unwrap_or("").to_string(),
-        priority: t["priority"].as_str().unwrap_or("medium").to_string(),
-    }).collect())
+    Ok(tasks
+        .iter()
+        .map(|t| TaskInfo {
+            id: t["id"].as_str().unwrap_or("").to_string(),
+            title: t["title"].as_str().unwrap_or("").to_string(),
+            status: t["status"].as_str().unwrap_or("").to_string(),
+            priority: t["priority"].as_str().unwrap_or("medium").to_string(),
+        })
+        .collect())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -715,29 +1093,40 @@ pub struct CommitInfo {
 #[tauri::command]
 async fn get_recent_commits(project_root: String) -> Result<Vec<CommitInfo>, String> {
     let output = Command::new("git")
-        .args(["log", "--oneline", "--no-merges", "-30", "--format=%h\t%s\t%ci"])
+        .args([
+            "log",
+            "--oneline",
+            "--no-merges",
+            "-30",
+            "--format=%h\t%s\t%ci",
+        ])
         .current_dir(&project_root)
         .output()
         .await
         .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().filter_map(|line| {
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() >= 2 {
-            Some(CommitInfo {
-                hash: parts[0].to_string(),
-                message: parts[1].to_string(),
-                date: parts.get(2).unwrap_or(&"").to_string(),
-            })
-        } else {
-            None
-        }
-    }).collect())
+    Ok(stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            if parts.len() >= 2 {
+                Some(CommitInfo {
+                    hash: parts[0].to_string(),
+                    message: parts[1].to_string(),
+                    date: parts.get(2).unwrap_or(&"").to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Arc::new(AoSessionStore::default()))
+        .manage(StreamRegistry::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -754,6 +1143,10 @@ pub fn run() {
             get_project_config,
             get_task_list,
             get_recent_commits,
+            get_ao_help,
+            start_ao_session,
+            stop_ao_session,
+            write_ao_session_stdin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

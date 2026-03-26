@@ -1,12 +1,17 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FleetOverview } from "./FleetOverview";
 import { FleetFlow } from "./FleetFlow";
 import { EventStream } from "./EventStream";
+import { CommandCenter } from "./CommandCenter";
 import type { DaemonHealth, StreamEvent, Project, FleetProject, WorkflowInfo, TaskSummary } from "./types";
 import { loadCachedFleet, saveCachedFleet } from "./store";
 import { cn } from "@/lib/utils";
+
+const MAX_EVENTS = 5000;
+const MAX_CACHED_EVENTS = 3000;
+const EVENT_FLUSH_MS = 100;
 
 function App() {
   const [health, setHealth] = useState<DaemonHealth[]>([]);
@@ -14,9 +19,11 @@ function App() {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowInfo[]>>({});
   const [tasks, setTasks] = useState<Record<string, TaskSummary>>({});
   const [events, setEvents] = useState<StreamEvent[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "flow" | "stream">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "flow" | "stream" | "cli">("overview");
   const [loading, setLoading] = useState(true);
   const projectsRef = useRef<Project[]>([]);
+  const pendingEventsRef = useRef<StreamEvent[]>([]);
+  const eventFlushTimerRef = useRef<number | null>(null);
 
   // Phase 0: load cached workflows/tasks for instant UI (skip health — it refreshes in <2s)
   useEffect(() => {
@@ -24,27 +31,62 @@ function App() {
       if (cached) {
         setWorkflows(cached.workflows);
         setTasks(cached.tasks);
+        setEvents(cached.events.slice(-MAX_EVENTS));
       }
+    });
+  }, []);
+
+  const flushPendingEvents = useCallback(() => {
+    eventFlushTimerRef.current = null;
+    if (pendingEventsRef.current.length === 0) return;
+    const batch = pendingEventsRef.current.splice(0, pendingEventsRef.current.length);
+    startTransition(() => {
+      setEvents((prev) => {
+        const next = prev.concat(batch);
+        return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
+      });
     });
   }, []);
 
   // Phase 1: discover projects (instant)
   useEffect(() => {
-    invoke<Project[]>("discover_projects").then((p) => {
-      setProjects(p);
-      projectsRef.current = p;
-      setLoading(false);
-      p.forEach((proj) => {
-        invoke("start_stream", { projectRoot: proj.root }).catch(console.error);
+    let cancelled = false;
+
+    invoke<Project[]>("discover_projects")
+      .then((p) => {
+        if (cancelled) return;
+        setProjects(p);
+        projectsRef.current = p;
+        setLoading(false);
+        p.forEach((proj) => {
+          invoke("start_stream", { projectRoot: proj.root }).catch(console.error);
+        });
+      })
+      .catch((error) => {
+        console.error("discover projects error:", error);
+        if (!cancelled) setLoading(false);
       });
-    });
 
     const unlisten = listen<StreamEvent>("stream-event", (e) => {
-      setEvents((prev) => [...prev.slice(-500), e.payload]);
+      pendingEventsRef.current.push(e.payload);
+      if (pendingEventsRef.current.length > MAX_EVENTS * 2) {
+        pendingEventsRef.current.splice(0, pendingEventsRef.current.length - MAX_EVENTS);
+      }
+      if (eventFlushTimerRef.current === null) {
+        eventFlushTimerRef.current = window.setTimeout(flushPendingEvents, EVENT_FLUSH_MS);
+      }
     });
 
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
+    return () => {
+      cancelled = true;
+      if (eventFlushTimerRef.current !== null) {
+        window.clearTimeout(eventFlushTimerRef.current);
+        eventFlushTimerRef.current = null;
+      }
+      pendingEventsRef.current = [];
+      unlisten.then((fn) => fn());
+    };
+  }, [flushPendingEvents]);
 
   // Phase 2: health (fast, parallel, every 10s)
   const healthFetchingRef = useRef(false);
@@ -62,16 +104,45 @@ function App() {
   }, []);
 
   // Phase 3: workflows + tasks (slower, non-blocking, every 30s)
+  const detailFetchingRef = useRef(false);
   const refreshDetails = useCallback(async () => {
-    const p = projectsRef.current;
-    for (const proj of p) {
-      // Fire and forget — each one updates state independently
-      invoke<WorkflowInfo[]>("get_workflows", { projectRoot: proj.root })
-        .then((wf) => setWorkflows((prev) => ({ ...prev, [proj.root]: wf })))
-        .catch(() => {});
-      invoke<TaskSummary>("get_task_summary", { projectRoot: proj.root })
-        .then((ts) => setTasks((prev) => ({ ...prev, [proj.root]: ts })))
-        .catch(() => {});
+    const currentProjects = projectsRef.current;
+    if (detailFetchingRef.current || currentProjects.length === 0) return;
+    detailFetchingRef.current = true;
+
+    try {
+      const detailResults = await Promise.all(
+        currentProjects.map(async (proj) => {
+          const [workflowResult, taskResult] = await Promise.allSettled([
+            invoke<WorkflowInfo[]>("get_workflows", { projectRoot: proj.root }),
+            invoke<TaskSummary>("get_task_summary", { projectRoot: proj.root }),
+          ]);
+
+          return {
+            root: proj.root,
+            workflows: workflowResult.status === "fulfilled" ? workflowResult.value : null,
+            taskSummary: taskResult.status === "fulfilled" ? taskResult.value : null,
+          };
+        }),
+      );
+
+      setWorkflows((prev) => {
+        const next = { ...prev };
+        for (const result of detailResults) {
+          if (result.workflows) next[result.root] = result.workflows;
+        }
+        return next;
+      });
+
+      setTasks((prev) => {
+        const next = { ...prev };
+        for (const result of detailResults) {
+          if (result.taskSummary) next[result.root] = result.taskSummary;
+        }
+        return next;
+      });
+    } finally {
+      detailFetchingRef.current = false;
     }
   }, []);
 
@@ -92,17 +163,22 @@ function App() {
         health,
         workflows,
         tasks,
-        events: [],
+        events: events.slice(-MAX_CACHED_EVENTS),
         updatedAt: Date.now(),
       });
     }
-  }, [health, workflows, tasks]);
+  }, [events, health, workflows, tasks]);
 
   // Build fleet by merging health + workflows + tasks
+  const healthByRoot = useMemo(
+    () => new Map(health.map((entry) => [entry.root, entry])),
+    [health],
+  );
+
   const fleet: FleetProject[] = projects.map((p) => ({
     name: p.name,
     root: p.root,
-    health: health.find((h) => h.root === p.root) || null,
+    health: healthByRoot.get(p.root) || null,
     workflows: workflows[p.root] || [],
     tasks: tasks[p.root] || null,
   }));
@@ -131,6 +207,7 @@ function App() {
           <button className={tabClass("overview")} onClick={() => setActiveTab("overview")}>Overview</button>
           <button className={tabClass("flow")} onClick={() => setActiveTab("flow")}>Flow</button>
           <button className={tabClass("stream")} onClick={() => setActiveTab("stream")}>Stream</button>
+          <button className={tabClass("cli")} onClick={() => setActiveTab("cli")}>CLI</button>
         </div>
       </header>
       <main className="flex-1 overflow-hidden">
@@ -140,8 +217,10 @@ function App() {
           <FleetOverview projects={fleet} events={events} />
         ) : activeTab === "flow" ? (
           <FleetFlow health={health} events={events} projects={projects} />
-        ) : (
+        ) : activeTab === "stream" ? (
           <EventStream events={events} />
+        ) : (
+          <CommandCenter projects={projects} />
         )}
       </main>
     </div>
