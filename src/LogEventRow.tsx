@@ -1,6 +1,15 @@
 import { cn } from "@/lib/utils";
 import type { StreamEvent } from "./types";
 import { MarkdownContent } from "./MarkdownContent";
+import {
+  getEventRunId,
+  getPrimaryBody,
+  getToolParams,
+  getToolPaths,
+  isMarkdownPreferredEvent,
+  isToolPathParamKey,
+  shouldRenderMarkdownBody,
+} from "./lib/logEvent";
 
 interface Props {
   event: StreamEvent;
@@ -13,19 +22,6 @@ interface ToolDescriptor {
   category: string;
   label: string;
   accentClass: string;
-}
-
-function getEventRunId(event: StreamEvent) {
-  return typeof event.run_id === "string"
-    ? event.run_id
-    : typeof event.meta?.run_id === "string"
-      ? event.meta.run_id
-      : null;
-}
-
-function getToolParams(event: StreamEvent) {
-  const params = event.meta && typeof event.meta === "object" ? event.meta.params : null;
-  return params && typeof params === "object" ? params as Record<string, unknown> : null;
 }
 
 function getToolServer(tool: string | undefined) {
@@ -111,13 +107,17 @@ function isSimpleParamValue(value: unknown) {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value == null;
 }
 
-function getPrimaryBody(event: StreamEvent) {
-  if (event.content && event.content.trim() && event.content !== event.msg) {
-    return event.content;
+function getSummaryMessage(event: StreamEvent) {
+  if (event.cat === "llm.output") {
+    return event.role ? `${event.role} output` : "LLM output";
   }
 
-  if (event.error && event.error.trim() && event.error !== event.msg) {
-    return event.error;
+  if (event.cat === "llm.thinking") {
+    return "LLM thinking";
+  }
+
+  if (event.cat === "llm.error") {
+    return "LLM error";
   }
 
   return event.msg;
@@ -125,20 +125,24 @@ function getPrimaryBody(event: StreamEvent) {
 
 export function LogEventRow({ event, compact = false, onWorkflowClick, showProject = false }: Props) {
   const toolParams = getToolParams(event);
+  const toolPaths = getToolPaths(event);
   const toolDescriptor = getToolDescriptor(event.tool);
   const toolServer = getToolServer(event.tool);
   const toolAction = getToolAction(event.tool);
   const runId = getEventRunId(event);
   const body = getPrimaryBody(event);
+  const summaryMessage = getSummaryMessage(event);
+  const showMarkdownBody = shouldRenderMarkdownBody(event, body);
   const command = typeof toolParams?.command === "string" ? toolParams.command : null;
   const description = typeof toolParams?.description === "string" ? toolParams.description : null;
   const remainingParams = toolParams
-    ? Object.entries(toolParams).filter(([key]) => key !== "command" && key !== "description")
+    ? Object.entries(toolParams).filter(([key]) => key !== "command" && key !== "description" && !isToolPathParamKey(key))
     : [];
   const hasDetails = Boolean(
-    (event.content && event.content !== event.msg)
+    showMarkdownBody
       || event.error
       || toolParams
+      || toolPaths.length > 0
       || event.subject_id
       || runId
       || event.role
@@ -152,7 +156,7 @@ export function LogEventRow({ event, compact = false, onWorkflowClick, showProje
         event.level === "error" && "border-l-2 border-l-chart-5",
         event.level === "warn" && "border-l-2 border-l-chart-4",
       )}
-      open={!compact && hasDetails && (event.cat.startsWith("llm.tool") || event.cat.startsWith("llm.output") || event.level === "error")}
+      open={!compact && hasDetails && (isMarkdownPreferredEvent(event) || event.cat.startsWith("llm.tool") || event.level === "error")}
     >
       <summary className="cursor-pointer list-none">
         <div className={cn("flex min-w-0 gap-2", compact ? "items-start" : "items-center")}>
@@ -177,8 +181,21 @@ export function LogEventRow({ event, compact = false, onWorkflowClick, showProje
           )}
           {toolDescriptor && <span className={cn("shrink-0 rounded px-1.5 py-px text-[9px] font-semibold", toolDescriptor.accentClass)}>{toolDescriptor.label}</span>}
           {event.tool && <span className="shrink-0 rounded bg-secondary px-1.5 py-px text-[9px] text-muted-foreground">{event.tool}</span>}
+          {toolPaths[0] && (
+            <span
+              className="max-w-[260px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap rounded bg-secondary px-1.5 py-px text-[9px] text-muted-foreground"
+              title={toolPaths[0]}
+            >
+              {toolPaths[0]}
+            </span>
+          )}
+          {toolPaths.length > 1 && (
+            <span className="shrink-0 rounded bg-secondary px-1 py-px text-[9px] text-muted-foreground">
+              +{toolPaths.length - 1} paths
+            </span>
+          )}
           {event.task_id && event.task_id !== "cron" && <span className="shrink-0 rounded bg-secondary px-1 py-px text-[9px] text-muted-foreground">{event.task_id}</span>}
-          <span className={cn("min-w-0 flex-1 whitespace-pre-wrap break-words", compact ? "leading-4" : "leading-5")}>{event.msg}</span>
+          <span className={cn("min-w-0 flex-1 whitespace-pre-wrap break-words", compact ? "leading-4" : "leading-5")}>{summaryMessage}</span>
         </div>
       </summary>
 
@@ -196,15 +213,32 @@ export function LogEventRow({ event, compact = false, onWorkflowClick, showProje
             {event.subject_id && <span>subject: {event.subject_id}</span>}
           </div>
 
-          {body && body !== event.msg && (
+          {showMarkdownBody && (
             <div className="rounded border border-border/70 bg-background px-3 py-2">
               <MarkdownContent content={body} />
             </div>
           )}
 
-          {event.error && (
+          {event.error && event.error !== body && (
             <div className="rounded border border-chart-5/20 bg-chart-5/8 px-3 py-2 text-chart-5">
               <MarkdownContent content={event.error} className="text-chart-5" />
+            </div>
+          )}
+
+          {toolPaths.length > 0 && (
+            <div className="rounded border border-border/70 bg-background px-3 py-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Paths</div>
+              <div className="flex flex-wrap gap-2">
+                {toolPaths.map((path) => (
+                  <code
+                    key={path}
+                    className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded bg-secondary px-1.5 py-1 font-mono text-[10px] text-foreground"
+                    title={path}
+                  >
+                    {path}
+                  </code>
+                ))}
+              </div>
             </div>
           )}
 

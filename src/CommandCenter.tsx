@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { startTransition, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ import type {
 } from "./types";
 
 const GLOBAL_SCOPE = "__global__";
+const MAX_SESSION_LINES = 1000;
+const OUTPUT_FLUSH_MS = 75;
 
 interface Props {
   projects: Project[];
@@ -129,15 +131,43 @@ export function CommandCenter({ projects }: Props) {
   const [outputLines, setOutputLines] = useState<Array<{ stream: string; line: string }>>([]);
   const [stdinValue, setStdinValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const helpCacheRef = useRef(new Map<string, AoCommandHelp>());
+  const pendingOutputRef = useRef<Array<{ stream: string; line: string }>>([]);
+  const outputFlushTimerRef = useRef<number | null>(null);
+
+  const flushPendingOutput = useCallback(() => {
+    outputFlushTimerRef.current = null;
+    if (pendingOutputRef.current.length === 0) return;
+
+    const batch = pendingOutputRef.current.splice(0, pendingOutputRef.current.length);
+    startTransition(() => {
+      setOutputLines((prev) => {
+        const next = prev.concat(batch);
+        return next.length > MAX_SESSION_LINES ? next.slice(next.length - MAX_SESSION_LINES) : next;
+      });
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoadingHelp(true);
+    const cacheKey = path.join("\u0000");
+    const cached = helpCacheRef.current.get(cacheKey);
+
     setError(null);
+    if (cached) {
+      setHelp(cached);
+      setLoadingHelp(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadingHelp(true);
 
     invoke<AoCommandHelp>("get_ao_help", { path })
       .then((payload) => {
         if (!cancelled) {
+          helpCacheRef.current.set(cacheKey, payload);
           setHelp(payload);
         }
       })
@@ -160,20 +190,32 @@ export function CommandCenter({ projects }: Props) {
   useEffect(() => {
     const outputPromise = listen<AoSessionOutput>("ao-session-output", (event) => {
       if (event.payload.session_id !== sessionId) return;
-      setOutputLines((prev) => [...prev.slice(-999), { stream: event.payload.stream, line: event.payload.line }]);
+      pendingOutputRef.current.push({ stream: event.payload.stream, line: event.payload.line });
+      if (pendingOutputRef.current.length > MAX_SESSION_LINES * 2) {
+        pendingOutputRef.current.splice(0, pendingOutputRef.current.length - MAX_SESSION_LINES);
+      }
+      if (outputFlushTimerRef.current === null) {
+        outputFlushTimerRef.current = window.setTimeout(flushPendingOutput, OUTPUT_FLUSH_MS);
+      }
     });
 
     const exitPromise = listen<AoSessionExit>("ao-session-exit", (event) => {
       if (event.payload.session_id !== sessionId) return;
+      flushPendingOutput();
       setSessionRunning(false);
       setSessionSuccess(event.payload.success);
     });
 
     return () => {
+      if (outputFlushTimerRef.current !== null) {
+        window.clearTimeout(outputFlushTimerRef.current);
+        outputFlushTimerRef.current = null;
+      }
+      pendingOutputRef.current = [];
       outputPromise.then((unlisten) => unlisten());
       exitPromise.then((unlisten) => unlisten());
     };
-  }, [sessionId]);
+  }, [flushPendingOutput, sessionId]);
 
   const openPath = (nextPath: string[]) => {
     setPath(nextPath);
@@ -187,6 +229,11 @@ export function CommandCenter({ projects }: Props) {
     }
 
     setError(null);
+    pendingOutputRef.current = [];
+    if (outputFlushTimerRef.current !== null) {
+      window.clearTimeout(outputFlushTimerRef.current);
+      outputFlushTimerRef.current = null;
+    }
     setOutputLines([]);
     setSessionRunning(true);
     setSessionSuccess(null);

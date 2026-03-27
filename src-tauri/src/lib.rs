@@ -92,6 +92,11 @@ struct AoSessionStore {
 }
 
 #[derive(Default)]
+struct AoHelpCache {
+    entries: Mutex<HashMap<String, AoCommandHelp>>,
+}
+
+#[derive(Default)]
 struct StreamRegistry {
     active_projects: Arc<AsyncMutex<HashSet<String>>>,
     next_filtered_id: AtomicU64,
@@ -510,6 +515,17 @@ async fn run_ao_json_cmd(args: &[String], timeout_secs: u64) -> Result<serde_jso
     }
 }
 
+async fn run_ao_json_cmd_str(
+    args: &[&str],
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let args = args
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    run_ao_json_cmd(&args, timeout_secs).await
+}
+
 fn parse_help_output(path: Vec<String>, stdout: &str) -> AoCommandHelp {
     let mut lines = stdout.lines();
     let about = lines.next().unwrap_or("").trim().to_string();
@@ -614,11 +630,33 @@ async fn emit_pipe_lines<R: tokio::io::AsyncRead + Unpin>(
 }
 
 #[tauri::command]
-async fn get_ao_help(path: Vec<String>) -> Result<AoCommandHelp, String> {
+async fn get_ao_help(
+    cache: tauri::State<'_, AoHelpCache>,
+    path: Vec<String>,
+) -> Result<AoCommandHelp, String> {
+    let cache_key = path.join("\0");
+    if let Some(help) = cache
+        .entries
+        .lock()
+        .map_err(|_| "help cache poisoned".to_string())?
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(help);
+    }
+
     let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
     args.push("--help");
     let stdout = run_ao_cmd(&args, 10).await?;
-    Ok(parse_help_output(path, &stdout))
+    let help = parse_help_output(path, &stdout);
+
+    cache
+        .entries
+        .lock()
+        .map_err(|_| "help cache poisoned".to_string())?
+        .insert(cache_key, help.clone());
+
+    Ok(help)
 }
 
 #[tauri::command]
@@ -759,20 +797,20 @@ async fn write_ao_session_stdin(
         .map_err(|e| e.to_string())
 }
 
-fn parse_health(project_root: &str, stdout: &str) -> DaemonHealth {
-    let name = PathBuf::from(project_root)
+fn project_name_from_root(project_root: &str) -> String {
+    PathBuf::from(project_root)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    let val: serde_json::Value = serde_json::from_str(stdout).unwrap_or_default();
-
+fn parse_health_value(project_root: &str, val: &serde_json::Value) -> DaemonHealth {
     DaemonHealth {
-        project: name,
+        project: project_name_from_root(project_root),
         root: project_root.to_string(),
         status: val["status"].as_str().unwrap_or("unknown").to_string(),
         active_agents: val["active_agents"].as_i64().unwrap_or(0),
-        pool_size: val["pool_size"].as_i64().unwrap_or(5),
+        pool_size: val["pool_size"].as_i64().unwrap_or(0),
         queued_tasks: val["queued_tasks"].as_i64().unwrap_or(0),
         daemon_pid: val["daemon_pid"].as_i64(),
         pool_utilization_percent: val["pool_utilization_percent"].as_f64().unwrap_or(0.0),
@@ -782,8 +820,18 @@ fn parse_health(project_root: &str, stdout: &str) -> DaemonHealth {
 
 #[tauri::command]
 async fn get_health(project_root: String) -> Result<DaemonHealth, String> {
-    let stdout = run_ao_cmd(&["daemon", "health", "--project-root", &project_root], 5).await?;
-    Ok(parse_health(&project_root, &stdout))
+    let data = run_ao_json_cmd_str(
+        &[
+            "daemon",
+            "health",
+            "--json",
+            "--project-root",
+            &project_root,
+        ],
+        5,
+    )
+    .await?;
+    Ok(parse_health_value(&project_root, &data))
 }
 
 #[tauri::command]
@@ -794,9 +842,11 @@ async fn get_all_health(projects: Vec<Project>) -> Result<Vec<DaemonHealth>, Str
         let root = project.root.clone();
         let name = project.name.clone();
         handles.push(tokio::spawn(async move {
-            match run_ao_cmd(&["daemon", "health", "--project-root", &root], 30).await {
-                Ok(stdout) => {
-                    let mut h = parse_health(&root, &stdout);
+            match run_ao_json_cmd_str(&["daemon", "health", "--json", "--project-root", &root], 30)
+                .await
+            {
+                Ok(data) => {
+                    let mut h = parse_health_value(&root, &data);
                     h.project = name;
                     h
                 }
@@ -996,13 +1046,19 @@ pub struct TaskSummary {
 
 #[tauri::command]
 async fn get_workflows(project_root: String) -> Result<Vec<WorkflowInfo>, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let stdout = run_ao_cmd(&["workflow", "list", "--project-root", &project_root], 5).await?;
-    let val: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
+    let project_name = project_name_from_root(&project_root);
+    let data = run_ao_json_cmd_str(
+        &[
+            "workflow",
+            "list",
+            "--json",
+            "--project-root",
+            &project_root,
+        ],
+        5,
+    )
+    .await?;
+    let val = data.as_array().cloned().unwrap_or_default();
 
     Ok(val
         .iter()
@@ -1032,40 +1088,48 @@ async fn get_workflows(project_root: String) -> Result<Vec<WorkflowInfo>, String
 
 #[tauri::command]
 async fn get_task_summary(project_root: String) -> Result<TaskSummary, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let project_name = project_name_from_root(&project_root);
+    let data = run_ao_json_cmd_str(
+        &["task", "stats", "--json", "--project-root", &project_root],
+        5,
+    )
+    .await?;
+    let by_status = data["by_status"].as_object().cloned().unwrap_or_default();
 
-    let stdout = run_ao_cmd(&["task", "list", "--project-root", &project_root], 5).await?;
-    let tasks: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap_or_default();
-
-    let mut summary = TaskSummary {
+    Ok(TaskSummary {
         project: project_name,
-        backlog: 0,
-        ready: 0,
-        blocked: 0,
-        done: 0,
-        cancelled: 0,
-        on_hold: 0,
-        in_progress: 0,
-        total: tasks.len() as i64,
-    };
-
-    for t in &tasks {
-        match t["status"].as_str().unwrap_or("") {
-            "backlog" => summary.backlog += 1,
-            "ready" => summary.ready += 1,
-            "blocked" => summary.blocked += 1,
-            "done" => summary.done += 1,
-            "cancelled" => summary.cancelled += 1,
-            "on-hold" | "on_hold" => summary.on_hold += 1,
-            "in-progress" | "in_progress" => summary.in_progress += 1,
-            _ => {}
-        }
-    }
-
-    Ok(summary)
+        backlog: by_status
+            .get("backlog")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        ready: by_status
+            .get("ready")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        blocked: by_status
+            .get("blocked")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        done: by_status
+            .get("done")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        cancelled: by_status
+            .get("cancelled")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        on_hold: by_status
+            .get("on_hold")
+            .or_else(|| by_status.get("on-hold"))
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        in_progress: by_status
+            .get("in_progress")
+            .or_else(|| by_status.get("in-progress"))
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        total: data["total"].as_i64().unwrap_or(0),
+    })
 }
 
 #[tauri::command]
@@ -1083,9 +1147,9 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
 
             let (health, workflows, tasks) = tokio::join!(
                 async {
-                    run_ao_cmd(&["daemon", "health", "--project-root", &r1], 5)
+                    run_ao_json_cmd_str(&["daemon", "health", "--json", "--project-root", &r1], 5)
                         .await
-                        .map(|s| parse_health(&r1, &s))
+                        .map(|data| parse_health_value(&r1, &data))
                         .ok()
                 },
                 async { get_workflows(r2).await.unwrap_or_default() },
@@ -1118,9 +1182,7 @@ fn parse_stream_event(
     val: &serde_json::Value,
 ) -> StreamEvent {
     let run_id = val["run_id"].as_str().map(String::from);
-    let workflow_id = run_id
-        .as_deref()
-        .and_then(parse_workflow_id_from_run_id);
+    let workflow_id = run_id.as_deref().and_then(parse_workflow_id_from_run_id);
     let wf_ref = val["meta"]["workflow_ref"]
         .as_str()
         .or(val["workflow_ref"].as_str())
@@ -1909,6 +1971,7 @@ async fn get_recent_commits(project_root: String) -> Result<Vec<CommitInfo>, Str
 pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(AoSessionStore::default()))
+        .manage(AoHelpCache::default())
         .manage(StreamRegistry::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())

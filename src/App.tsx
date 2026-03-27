@@ -8,6 +8,7 @@ import { CommandCenter } from "./CommandCenter";
 import { TaskWorkbench } from "./TaskWorkbench";
 import type {
   DaemonHealth,
+  FleetData,
   StreamEvent,
   Project,
   FleetProject,
@@ -31,7 +32,6 @@ const TAB_META: Array<{
   railLabel: string;
   eyebrow: string;
   description: string;
-  shortDescription: string;
 }> = [
   {
     id: "overview",
@@ -39,8 +39,7 @@ const TAB_META: Array<{
     compactLabel: "OV",
     railLabel: "Overview",
     eyebrow: "Mission Control",
-    description: "Track daemon health, AO home status, and project-level operating pressure from a single surface.",
-    shortDescription: "Health, AO home, and project pulse.",
+    description: "Track daemon health and project-level operating pressure.",
   },
   {
     id: "flow",
@@ -48,8 +47,7 @@ const TAB_META: Array<{
     compactLabel: "FL",
     railLabel: "Flow",
     eyebrow: "Topology Map",
-    description: "Inspect the live workflow graph across projects, schedules, phases, agents, and MCP dependencies.",
-    shortDescription: "Project topology and execution paths.",
+    description: "Inspect the live workflow graph across projects and agents.",
   },
   {
     id: "stream",
@@ -57,8 +55,7 @@ const TAB_META: Array<{
     compactLabel: "EV",
     railLabel: "Events",
     eyebrow: "Live Feed",
-    description: "Watch the aggregated event firehose with fast filtering for project, category, and severity.",
-    shortDescription: "Cross-project event firehose.",
+    description: "Watch the aggregated event firehose with fast filtering.",
   },
   {
     id: "tasks",
@@ -66,8 +63,7 @@ const TAB_META: Array<{
     compactLabel: "TK",
     railLabel: "Tasks",
     eyebrow: "Operational Backlog",
-    description: "Move from fleet telemetry into concrete work: inspect, prioritize, assign, and update AO tasks.",
-    shortDescription: "Task list, detail, and actions.",
+    description: "Inspect, prioritize, assign, and update AO tasks.",
   },
   {
     id: "cli",
@@ -75,8 +71,7 @@ const TAB_META: Array<{
     compactLabel: "AO",
     railLabel: "AO CLI",
     eyebrow: "AO Surface",
-    description: "Navigate the installed AO CLI, run commands in project or global scope, and stream structured output.",
-    shortDescription: "Browse and run AO commands.",
+    description: "Navigate and run AO commands in project or global scope.",
   },
 ];
 
@@ -97,6 +92,7 @@ function App() {
   useEffect(() => {
     loadCachedFleet().then((cached) => {
       if (cached) {
+        setHealth(cached.health);
         setWorkflows(cached.workflows);
         setTasks(cached.tasks);
         setEvents(cached.events.slice(-MAX_EVENTS));
@@ -170,74 +166,44 @@ function App() {
     return () => clearInterval(interval);
   }, [refreshGlobalAoInfo]);
 
-  const healthFetchingRef = useRef(false);
-  const refreshHealth = useCallback(async () => {
-    if (healthFetchingRef.current || projectsRef.current.length === 0) return;
-    healthFetchingRef.current = true;
-    try {
-      const h = await invoke<DaemonHealth[]>("get_all_health", { projects: projectsRef.current });
-      if (h.length > 0) setHealth(h);
-    } catch (e) {
-      console.error("health error:", e);
-    } finally {
-      healthFetchingRef.current = false;
-    }
-  }, []);
-
-  const detailFetchingRef = useRef(false);
-  const refreshDetails = useCallback(async () => {
-    const currentProjects = projectsRef.current;
-    if (detailFetchingRef.current || currentProjects.length === 0) return;
-    detailFetchingRef.current = true;
+  const fleetFetchingRef = useRef(false);
+  const refreshFleet = useCallback(async () => {
+    if (fleetFetchingRef.current || projectsRef.current.length === 0) return;
+    fleetFetchingRef.current = true;
 
     try {
-      const detailResults = await Promise.all(
-        currentProjects.map(async (proj) => {
-          const [workflowResult, taskResult] = await Promise.allSettled([
-            invoke<WorkflowInfo[]>("get_workflows", { projectRoot: proj.root }),
-            invoke<TaskSummary>("get_task_summary", { projectRoot: proj.root }),
-          ]);
+      const fleetData = await invoke<FleetData>("get_fleet_data");
+      const nextHealth: DaemonHealth[] = [];
+      const nextWorkflows: Record<string, WorkflowInfo[]> = {};
+      const nextTasks: Record<string, TaskSummary> = {};
 
-          return {
-            root: proj.root,
-            workflows: workflowResult.status === "fulfilled" ? workflowResult.value : null,
-            taskSummary: taskResult.status === "fulfilled" ? taskResult.value : null,
-          };
-        }),
-      );
+      for (const project of fleetData.projects) {
+        if (project.health) nextHealth.push(project.health);
+        nextWorkflows[project.root] = project.workflows ?? [];
+        if (project.tasks) nextTasks[project.root] = project.tasks;
+      }
 
-      setWorkflows((prev) => {
-        const next = { ...prev };
-        for (const result of detailResults) {
-          if (result.workflows) next[result.root] = result.workflows;
-        }
-        return next;
+      startTransition(() => {
+        setHealth(nextHealth);
+        setWorkflows(nextWorkflows);
+        setTasks(nextTasks);
       });
-
-      setTasks((prev) => {
-        const next = { ...prev };
-        for (const result of detailResults) {
-          if (result.taskSummary) next[result.root] = result.taskSummary;
-        }
-        return next;
-      });
+    } catch (error) {
+      console.error("fleet refresh error:", error);
     } finally {
-      detailFetchingRef.current = false;
+      fleetFetchingRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     if (projects.length > 0) {
-      refreshHealth();
-      refreshDetails();
-      const healthInterval = setInterval(refreshHealth, 30000);
-      const detailInterval = setInterval(refreshDetails, 30000);
+      refreshFleet();
+      const fleetInterval = setInterval(refreshFleet, 30000);
       return () => {
-        clearInterval(healthInterval);
-        clearInterval(detailInterval);
+        clearInterval(fleetInterval);
       };
     }
-  }, [projects, refreshHealth, refreshDetails]);
+  }, [projects, refreshFleet]);
 
   useEffect(() => {
     if (health.length > 0 || Object.keys(workflows).length > 0) {
@@ -279,10 +245,10 @@ function App() {
     ? shortValue(globalAoInfo.sync.server ?? globalAoInfo.sync.project_id ?? "Connected")
     : "Local only";
   const primarySignal = errors > 0
-    ? `${formatCount(errors)} active errors are surfacing across the fleet.`
+    ? `${formatCount(errors)} active errors surfacing.`
     : totalQueue > 20
-      ? `${formatCount(totalQueue)} queued subjects are building up across running projects.`
-      : `${formatCount(runningProjects)} projects are online and operating within expected pressure.`;
+      ? `${formatCount(totalQueue)} queued subjects building up.`
+      : `${formatCount(runningProjects)} projects online and stable.`;
 
   const tabMetrics: Record<AppTab, string> = {
     overview: formatCount(projects.length),
@@ -319,58 +285,35 @@ function App() {
   return (
     <div className="relative h-screen overflow-hidden bg-background text-foreground font-sans">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsla(178,70%,58%,0.18),transparent_34%),radial-gradient(circle_at_top_right,hsla(34,84%,60%,0.18),transparent_30%),linear-gradient(180deg,transparent,hsla(220,20%,6%,0.58)_68%,hsla(220,22%,5%,0.9))]" />
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsla(178,70%,58%,0.1),transparent_40%),radial-gradient(circle_at_top_right,hsla(34,84%,60%,0.08),transparent_35%)]" />
       </div>
 
       <div
         className={cn(
           "relative grid h-full w-full",
-          navCollapsed ? "lg:grid-cols-[84px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
+          navCollapsed ? "lg:grid-cols-[72px_minmax(0,1fr)]" : "lg:grid-cols-[280px_minmax(0,1fr)]",
         )}
       >
-        <aside className="flex h-full min-h-0 flex-col border-r border-white/10 bg-[linear-gradient(180deg,hsla(218,24%,13%,0.995),hsla(220,22%,8%,1))] shadow-[18px_0_40px_rgba(0,0,0,0.18)]">
+        <aside className="flex h-full min-h-0 flex-col border-r border-white/5 bg-card/40 backdrop-blur-md">
           <div className="flex h-full flex-col">
-            <div className={cn("border-b border-white/10 px-3 py-4", navCollapsed ? "lg:px-2.5" : "lg:px-4")}>
-              <div className={cn("flex items-start gap-3", navCollapsed && "lg:flex-col lg:items-center lg:gap-2")}>
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-[11px] font-semibold tracking-[0.24em] text-primary">
+            <div className={cn("px-4 py-6", navCollapsed && "px-2 text-center")}>
+              <div className={cn("flex items-center gap-3", navCollapsed && "flex-col")}>
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/10 text-xs font-bold tracking-widest text-primary shadow-[0_0_20px_rgba(var(--la-primary),0.2)]">
                   AO
                 </div>
                 {!navCollapsed && (
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">AO Fleet Console</div>
-                    <div className="mt-1 text-base font-semibold text-foreground">Operations</div>
-                    <div className="mt-2 space-y-1 text-[12px] leading-4 text-muted-foreground">
-                      <div className="flex items-center gap-2">
-                        <span className={cn("h-2 w-2 rounded-full", statusToneDotClass(fleetStatusTone))} />
-                        <span>{fleetStatusLabel}</span>
-                      </div>
-                      <div>{formatCount(projects.length)} projects, {formatCount(totalAgents)} active agents</div>
-                      <div>30 second refresh cadence</div>
+                    <div className="text-sm font-bold text-foreground">Fleet Console</div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={cn("h-1.5 w-1.5 rounded-full shadow-[0_0_8px_currentColor]", statusToneDotClass(fleetStatusTone))} />
+                      <span className="text-xs text-muted-foreground">{fleetStatusLabel}</span>
                     </div>
                   </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setNavCollapsed((current) => !current)}
-                  className={cn(
-                    "border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground",
-                    navCollapsed ? "" : "ml-auto",
-                  )}
-                  aria-label={navCollapsed ? "Expand navigation sidebar" : "Collapse navigation sidebar"}
-                >
-                  {navCollapsed ? "»" : "Hide"}
-                </button>
               </div>
             </div>
 
-            <div className={cn("grid gap-3 px-3 py-4 lg:flex-1 lg:overflow-auto", navCollapsed ? "lg:px-2 lg:py-3" : "lg:px-4")}>
-              {!navCollapsed && (
-                <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                  <span>Control Surfaces</span>
-                  <span>{TAB_META.length}</span>
-                </div>
-              )}
+            <nav className="flex-1 space-y-1 px-2 py-4 overflow-y-auto">
               {TAB_META.map((tab) => (
                 <SidebarNavItem
                   key={tab.id}
@@ -378,104 +321,67 @@ function App() {
                   collapsed={navCollapsed}
                   label={tab.railLabel}
                   code={tab.compactLabel}
-                  eyebrow={tab.eyebrow}
-                  description={tab.shortDescription}
                   metric={tabMetrics[tab.id]}
                   onClick={() => setActiveTab(tab.id)}
                 />
               ))}
-            </div>
+            </nav>
 
-            {!navCollapsed ? (
-              <div className="grid gap-3 border-t border-white/10 px-4 py-4">
-                <div className="text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                  Context
+            <div className="p-4 border-t border-white/5">
+              {!navCollapsed ? (
+                <div className="space-y-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/60">
+                    System Status
+                  </div>
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-muted-foreground">Agents</span>
+                      <span className="font-medium">{totalAgents} active</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-muted-foreground">Sync</span>
+                      <span className={cn("font-medium", globalAoInfo?.sync.configured ? "text-chart-1" : "text-muted-foreground")}>
+                        {globalAoInfo?.sync.configured ? "Online" : "Local"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <RailContextList
-                  title="AO Home"
-                  items={[
-                    globalAoInfo ? compactPath(globalAoInfo.ao_home) : "Resolving AO home",
-                    globalAoInfo?.agent_runner_token_configured ? "Runner token configured" : "Runner token missing",
-                    globalAoInfo?.sync.configured ? "Global sync configured" : "Local workspace mode",
-                  ]}
-                />
-                <RailContextList
-                  title="Activity"
-                  items={[
-                    `${formatCount(totalWorkflows)} workflows visible`,
-                    `${formatCount(errors)} buffered errors`,
-                    lastEvent ? `Latest event ${lastEvent.ts.slice(11, 19)}` : "Waiting for event traffic",
-                  ]}
-                />
-              </div>
-            ) : (
-              <div className="grid gap-2 border-t border-white/10 px-2 py-3">
-                <CollapsedRailStat label="WF" value={formatCount(totalWorkflows)} />
-                <CollapsedRailStat label="ERR" value={formatCount(errors)} tone={errors > 0 ? "critical" : "default"} />
-                <CollapsedRailStat label="AO" value={globalAoInfo?.sync.configured ? "ON" : "OFF"} tone={globalAoInfo?.sync.configured ? "success" : "default"} />
-              </div>
-            )}
+              ) : (
+                <button 
+                  onClick={() => setNavCollapsed(false)}
+                  className="w-full flex justify-center text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <span className="text-lg">»</span>
+                </button>
+              )}
+            </div>
           </div>
         </aside>
 
-        <section className="min-h-0 min-w-0 overflow-hidden">
-          <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2 sm:px-3 sm:py-3 lg:gap-3 lg:px-4 lg:py-4">
-            <header className="overflow-hidden rounded-[16px] border border-white/10 bg-[linear-gradient(135deg,hsla(215,27%,16%,0.9),hsla(220,24%,10%,0.88))] shadow-[0_14px_32px_rgba(0,0,0,0.18)] backdrop-blur-xl">
-              <div className="flex flex-col gap-2 px-3 py-2.5 sm:px-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
-                    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-0.5">AO Fleet</span>
-                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-2.5 py-0.5 normal-case tracking-normal text-[11px]">
-                      <span className={cn("h-2 w-2 rounded-full", statusToneDotClass(fleetStatusTone))} />
-                      <span className="font-medium text-foreground">{fleetStatusLabel}</span>
-                    </span>
-                  </div>
-                  <div className="mt-1.5 text-sm font-semibold text-foreground">
-                    Fleet operations cockpit
-                  </div>
-                  <div className="mt-0.5 text-[12px] text-muted-foreground">
-                    {primarySignal}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  <CompactHeaderMetric label="Live" value={`${formatCount(runningProjects)}/${formatCount(projects.length)}`} tone={fleetStatusTone} />
-                  <CompactHeaderMetric label="Agents" value={`${formatCount(totalAgents)}/${formatCount(totalPool)}`} />
-                  <CompactHeaderMetric label="Queue" value={formatCount(totalQueue)} tone={totalQueue > 20 ? "warning" : "default"} />
-                  <CompactHeaderMetric label="Sync" value={syncLabel} tone={globalAoInfo?.sync.configured ? "success" : "default"} />
-                </div>
-              </div>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-hidden rounded-[18px] border border-white/10 bg-[linear-gradient(180deg,hsla(217,26%,13%,0.98),hsla(222,24%,9%,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.22)]">
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="border-b border-white/10 px-4 py-2.5 sm:px-5">
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-                    <div className="max-w-3xl">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                        {activeMeta.eyebrow}
-                      </p>
-                      <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                        {activeMeta.label}
-                      </h2>
-                      <p className="mt-0.5 text-[12px] leading-5 text-muted-foreground">
-                        {activeMeta.shortDescription}
-                      </p>
-                    </div>
-
-                    <div className="grid gap-1 text-right text-[11px] text-muted-foreground">
-                      <div>{syncLabel} sync context</div>
-                      <div>{formatCount(totalWorkflows)} workflows visible</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-hidden bg-[linear-gradient(180deg,hsla(0,0%,100%,0.02),transparent_20%)]">
-                  {renderActiveView()}
-                </div>
+        <section className="flex min-h-0 flex-col bg-[linear-gradient(180deg,hsla(220,30%,7%,0.5),hsla(220,30%,5%,0.8))]">
+          <header className="h-16 shrink-0 border-b border-white/5 bg-card/20 backdrop-blur-md flex items-center justify-between px-6">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setNavCollapsed(!navCollapsed)}
+                className="text-muted-foreground hover:text-foreground p-1 transition-colors"
+              >
+                {navCollapsed ? "»" : "«"}
+              </button>
+              <div>
+                <h1 className="text-base font-bold text-foreground">{activeMeta.label}</h1>
+                <p className="text-xs text-muted-foreground">{activeMeta.description}</p>
               </div>
             </div>
-          </div>
+
+            <div className="flex items-center gap-3">
+              <CompactHeaderMetric label="Live" value={`${runningProjects}/${projects.length}`} tone={fleetStatusTone} />
+              <CompactHeaderMetric label="Queue" value={formatCount(totalQueue)} tone={totalQueue > 20 ? "warning" : "default"} />
+            </div>
+          </header>
+
+          <main className="flex-1 min-h-0 overflow-hidden relative">
+            {renderActiveView()}
+          </main>
         </section>
       </div>
     </div>
@@ -492,9 +398,9 @@ function CompactHeaderMetric({
   tone?: "default" | "success" | "warning" | "critical";
 }) {
   return (
-    <div className="rounded-full border border-white/10 bg-black/18 px-3 py-1.5">
-      <div className={cn("text-sm font-semibold", toneTextClass(tone))}>{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
+    <div className="flex flex-col items-end px-3">
+      <div className={cn("text-sm font-bold", toneTextClass(tone))}>{value}</div>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">{label}</div>
     </div>
   );
 }
@@ -504,8 +410,6 @@ function SidebarNavItem({
   collapsed,
   label,
   code,
-  eyebrow,
-  description,
   metric,
   onClick,
 }: {
@@ -513,8 +417,6 @@ function SidebarNavItem({
   collapsed: boolean;
   label: string;
   code: string;
-  eyebrow: string;
-  description: string;
   metric: string;
   onClick: () => void;
 }) {
@@ -522,56 +424,41 @@ function SidebarNavItem({
     <button
       type="button"
       onClick={onClick}
-      aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative overflow-hidden border-l-2 px-3 py-3 text-left transition-all duration-200",
+        "group relative flex items-center w-full h-11 transition-all duration-200 rounded-lg mx-auto",
         active
-          ? "border-l-primary bg-white/[0.05]"
-          : "border-l-transparent bg-transparent hover:border-l-white/20 hover:bg-white/[0.03]",
-        collapsed && "lg:px-2 lg:py-3",
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+        collapsed ? "w-11 justify-center" : "px-3 w-[calc(100%-16px)]",
       )}
     >
-      <div className={cn("flex items-start gap-3", collapsed && "lg:flex-col lg:items-center lg:gap-2")}>
-        <div
-          className={cn(
-            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center border text-[11px] font-semibold tracking-[0.18em] transition-colors",
-            collapsed && "lg:mt-0",
-            active
-              ? "border-primary/25 bg-primary/10 text-primary"
-              : "border-white/10 bg-black/10 text-muted-foreground",
-          )}
-        >
-          {code}
-        </div>
-        <div className={cn("min-w-0 flex-1", collapsed && "lg:w-full lg:text-center")}>
-          <div className={cn("flex items-start justify-between gap-3", collapsed && "lg:flex-col lg:items-center lg:gap-1")}>
-            <span className="text-[13px] font-semibold text-foreground">
-              {collapsed ? code : label}
-            </span>
-            <span
-              className={cn(
-                "border px-2 py-0.5 text-[10px] font-medium",
-                active
-                  ? "border-primary/20 bg-primary/8 text-foreground"
-                  : "border-white/10 bg-black/10 text-muted-foreground",
-              )}
-            >
-              {metric}
-            </span>
-          </div>
-          {!collapsed && (
-            <>
-              <div className="mt-1 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                {eyebrow}
-              </div>
-              <p className="mt-1.5 max-w-[22rem] text-[12px] leading-4 text-muted-foreground">{description}</p>
-            </>
-          )}
-        </div>
+      <div className={cn(
+        "flex shrink-0 items-center justify-center rounded-md text-[10px] font-bold",
+        active ? "text-primary" : "text-muted-foreground/60",
+        collapsed ? "h-8 w-8" : "h-5 w-5"
+      )}>
+        {code}
       </div>
+      
+      {!collapsed && (
+        <>
+          <span className="ml-3 text-sm font-medium flex-1 text-left">{label}</span>
+          <span className={cn(
+            "text-[10px] font-bold px-1.5 py-0.5 rounded border",
+            active ? "border-primary/30 bg-primary/5" : "border-white/5 bg-white/5"
+          )}>
+            {metric}
+          </span>
+        </>
+      )}
+      
+      {active && (
+        <div className="absolute left-0 w-1 h-5 bg-primary rounded-full -ml-px" />
+      )}
     </button>
   );
 }
+
 
 function RailContextList({
   title,

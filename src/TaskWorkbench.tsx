@@ -668,491 +668,295 @@ export function TaskWorkbench({ projects }: Props) {
   const statusCounts = stats?.by_status ?? {};
 
   return (
-    <div className="grid h-full min-h-0 gap-3 p-3 sm:p-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/40">
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Task Workbench</div>
-            <button
-              className="ml-auto rounded border border-border px-2 py-1 text-[11px] text-muted-foreground"
-              onClick={() => void refreshCurrentView(true)}
-            >
+    <div className="h-full flex gap-4 p-6 overflow-hidden bg-background/50">
+      {/* Sidebar Task List */}
+      <aside className="w-[380px] flex flex-col rounded-2xl border border-white/5 bg-card/20 overflow-hidden backdrop-blur-sm">
+        <div className="p-4 border-b border-white/5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold uppercase tracking-widest text-primary/80">Task Backlog</h2>
+            <button onClick={() => refreshCurrentView(true)} className="text-[10px] font-bold text-muted-foreground hover:text-foreground transition-colors uppercase tracking-widest">
               Refresh
             </button>
           </div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+
+          <div className="space-y-2">
             <select
               value={selectedProjectRoot}
-              onChange={(event) => {
-                setSelectedProjectRoot(event.target.value);
-                setShowCreateForm(false);
-              }}
-              aria-label="Select project"
-              className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
+              onChange={(e) => setSelectedProjectRoot(e.target.value)}
+              className="w-full h-10 bg-white/5 border border-white/5 rounded-xl px-3 text-sm font-medium outline-none focus:border-primary/50"
             >
-              {projects.map((project) => (
-                <option key={project.root} value={project.root}>
-                  {project.name}
-                </option>
-              ))}
+              {projects.map((p) => <option key={p.root} value={p.root}>{p.name}</option>)}
             </select>
-            <button
-              className={cn(
-                "rounded border px-3 py-2 text-sm",
-                prioritized ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground"
-              )}
-              onClick={() => setPrioritized((current) => !current)}
-            >
-              Prioritized
-            </button>
-          </div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-            <MetricCard label="Total" value={statsLoading && !stats ? "..." : (stats?.total ?? tasks.length)} />
-            <MetricCard label="In Progress" value={statsLoading && !stats ? "..." : (stats?.in_progress ?? 0)} tone="text-chart-1" />
-            <MetricCard label="Blocked" value={statsLoading && !stats ? "..." : (stats?.blocked ?? 0)} tone="text-chart-4" />
-          </div>
-          {!nextTask && nextTaskLoading ? (
-            <div className="mt-3 rounded-lg border border-border px-3 py-2 text-[11px] text-muted-foreground">
-              Finding next ready task...
-            </div>
-          ) : nextTask && (
-            <div className="mt-3 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2">
-              <button
-                className="block w-full text-left"
-                onClick={() => {
-                  setSelectedTaskId(nextTask.id);
-                  setShowCreateForm(false);
-                }}
+
+            <div className="flex gap-2">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search tasks..."
+                className="flex-1 h-10 bg-white/5 border border-white/5 rounded-xl px-3 text-sm outline-none focus:border-primary/50"
+              />
+              <button 
+                onClick={() => { setShowCreateForm(true); setSelectedTaskId(null); }}
+                className="h-10 px-4 bg-primary text-primary-foreground rounded-xl text-sm font-bold hover:opacity-90 transition-opacity"
               >
-                <div className="text-[10px] uppercase tracking-wide text-primary">Next Ready Task</div>
-                <div className="mt-1 text-sm font-medium text-foreground">{nextTask.id} · {nextTask.title}</div>
+                New
               </button>
-              {nextTaskLoading && (
-                <div className="mt-2 text-[10px] text-primary/80">Refreshing next-task recommendation…</div>
-              )}
             </div>
-          )}
-          <div className="mt-3 flex gap-2">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search tasks"
-              aria-label="Search tasks"
-              className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-            />
-            <button
-              className="rounded bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
-              onClick={() => {
-                setShowCreateForm(true);
-                setSelectedTaskId(null);
-                setSelectedTask(null);
-              }}
-            >
-              New
-            </button>
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              aria-label="Filter tasks by status"
-              className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-            >
-              <option value="all">All statuses</option>
-              {STATUS_OPTIONS.map((status) => (
-                <option key={status} value={status}>
-                  {status} ({statusCounts[status] ?? 0})
-                </option>
-              ))}
+
+          <div className="flex gap-2">
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+              className="flex-1 h-9 bg-white/5 border border-white/5 rounded-lg px-2 text-[10px] font-bold outline-none uppercase tracking-wider">
+              <option value="all">All Status</option>
+              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
             </select>
-            <select
-              value={priorityFilter}
-              onChange={(event) => setPriorityFilter(event.target.value)}
-              aria-label="Filter tasks by priority"
-              className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-            >
-              <option value="all">All priorities</option>
-              {PRIORITY_OPTIONS.map((priority) => (
-                <option key={priority} value={priority}>{priority}</option>
-              ))}
+            <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}
+              className="flex-1 h-9 bg-white/5 border border-white/5 rounded-lg px-2 text-[10px] font-bold outline-none uppercase tracking-wider">
+              <option value="all">All Priority</option>
+              {PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-          {tasks.length === 0 && loading ? (
-            <div className="px-2 py-6 text-center text-xs text-muted-foreground">Loading tasks...</div>
-          ) : tasks.length === 0 ? (
-            <div className="px-2 py-6 text-center text-xs text-muted-foreground">No tasks for this filter.</div>
-          ) : (
-            <>
-              {loading && (
-                <div className="px-2 pb-2 text-[11px] text-muted-foreground">Refreshing task page…</div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+          {tasks.map((task) => (
+            <button
+              key={task.id}
+              onClick={() => { setSelectedTaskId(task.id); setShowCreateForm(false); }}
+              className={cn(
+                "w-full p-4 rounded-xl text-left transition-all duration-200 border",
+                selectedTaskId === task.id && !showCreateForm
+                  ? "bg-primary/10 border-primary/30"
+                  : "border-transparent hover:bg-white/5"
               )}
-              {tasks.map((task) => (
-                <button
-                  key={task.id}
-                  className={cn(
-                    "mb-1 block w-full rounded-lg border px-3 py-2 text-left",
-                    selectedTaskId === task.id && !showCreateForm
-                      ? "border-primary bg-primary/10"
-                      : "border-transparent hover:border-primary/30 hover:bg-background",
-                  )}
-                  onClick={() => {
-                    setSelectedTaskId(task.id);
-                    setShowCreateForm(false);
-                  }}
-                >
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="font-mono text-[11px] text-muted-foreground">{task.id}</div>
-                      <div className="mt-1 text-sm font-medium text-foreground">{task.title}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className={cn("text-[11px] font-semibold", STATUS_COLORS[normalizeStatus(task.status)] ?? "text-foreground")}>
-                        {normalizeStatus(task.status)}
-                      </div>
-                      <div className={cn("text-[10px]", PRIORITY_COLORS[task.priority] ?? "text-muted-foreground")}>
-                        {task.priority}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </>
-          )}
-          <div className="sticky bottom-0 mt-2 flex items-center gap-2 border-t border-border bg-card/95 px-2 py-2 backdrop-blur">
-            <button
-              className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground disabled:opacity-40"
-              disabled={page === 0 || loading}
-              onClick={() => setPage((current) => Math.max(0, current - 1))}
             >
-              Prev
+              <div className="flex justify-between items-start mb-1">
+                <span className="text-[10px] font-bold font-mono text-muted-foreground uppercase tracking-widest">{task.id}</span>
+                <span className={cn("text-[10px] font-bold uppercase", STATUS_COLORS[normalizeStatus(task.status)] || "text-muted-foreground")}>
+                  {normalizeStatus(task.status).replace("_", " ")}
+                </span>
+              </div>
+              <div className="text-sm font-bold text-foreground mb-1 line-clamp-2">{task.title}</div>
+              <div className={cn("text-[10px] font-bold uppercase tracking-widest opacity-60", PRIORITY_COLORS[task.priority] || "text-muted-foreground")}>
+                {task.priority}
+              </div>
             </button>
-            <div className="flex-1 text-center text-[11px] text-muted-foreground">
-              Page {page + 1}
-            </div>
-            <button
-              className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground disabled:opacity-40"
-              disabled={!hasNextPage || loading}
-              onClick={() => setPage((current) => current + 1)}
-            >
-              Next
-            </button>
-          </div>
+          ))}
+        </div>
+
+        <div className="p-4 border-t border-white/5 flex items-center justify-between bg-card/5">
+          <button disabled={page === 0 || loading} onClick={() => setPage(p => p - 1)}
+            className="text-[10px] font-bold text-muted-foreground hover:text-foreground disabled:opacity-30 tracking-widest">PREV</button>
+          <span className="text-[10px] font-bold text-muted-foreground/50 tracking-widest uppercase">Page {page + 1}</span>
+          <button disabled={!hasNextPage || loading} onClick={() => setPage(p => p + 1)}
+            className="text-[10px] font-bold text-muted-foreground hover:text-foreground disabled:opacity-30 tracking-widest">NEXT</button>
         </div>
       </aside>
 
-      <section className="min-h-0 min-w-0 overflow-auto rounded-[24px] border border-border/80 bg-background">
-        <div className="border-b border-border bg-card px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Project</div>
-              <div className="text-lg font-semibold text-foreground">{selectedProject?.name ?? "No project selected"}</div>
-            </div>
-            {busyAction && (
-              <div className="rounded bg-primary/10 px-2 py-1 text-[11px] text-primary">
-                {busyAction}
-              </div>
-            )}
-            {feedback && (
-              <div className="ml-auto max-w-[520px] text-right text-xs text-chart-4">{feedback}</div>
-            )}
-          </div>
-        </div>
-
+      {/* Detail View */}
+      <main className="flex-1 rounded-2xl border border-white/5 bg-card/10 overflow-hidden flex flex-col backdrop-blur-sm">
         {showCreateForm ? (
-          <div className="mx-auto flex max-w-4xl flex-col gap-4 px-5 py-5">
-            <SectionCard title="Create Task" subtitle="Create a task directly from the desktop app.">
-              <div className="grid gap-3">
-                <input
-                  value={createForm.title ?? ""}
-                  onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))}
-                  placeholder="Task title"
-                  aria-label="Task title"
-                  className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <textarea
-                  value={createForm.description ?? ""}
-                  onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="Description"
-                  rows={6}
-                  aria-label="Task description"
-                  className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <select
-                    value={createForm.task_type ?? "feature"}
-                    onChange={(event) => setCreateForm((current) => ({ ...current, task_type: event.target.value }))}
-                    aria-label="Task type"
-                    className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-                  >
-                    {TASK_TYPE_OPTIONS.map((taskType) => (
-                      <option key={taskType} value={taskType}>{taskType}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={createForm.priority ?? "medium"}
-                    onChange={(event) => setCreateForm((current) => ({ ...current, priority: event.target.value }))}
-                    aria-label="Task priority"
-                    className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-                  >
-                    {PRIORITY_OPTIONS.map((priority) => (
-                      <option key={priority} value={priority}>{priority}</option>
-                    ))}
+          <div className="p-8 max-w-3xl mx-auto w-full space-y-8">
+            <div>
+              <h2 className="text-2xl font-bold text-foreground tracking-tight">Create New Task</h2>
+              <p className="text-sm text-muted-foreground mt-1">Define operational requirements for the selected project.</p>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Task Title</label>
+                <input value={createForm.title} onChange={(e) => setCreateForm(c => ({...c, title: e.target.value}))}
+                  placeholder="e.g., Implement OAuth2 flow" className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 text-base outline-none focus:border-primary/50 transition-colors" />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Description</label>
+                <textarea value={createForm.description} onChange={(e) => setCreateForm(c => ({...c, description: e.target.value}))}
+                  placeholder="Context, acceptance criteria, and technical details..." rows={8} className="w-full bg-white/5 border border-white/10 rounded-xl p-4 text-base outline-none focus:border-primary/50 resize-none transition-colors" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Task Type</label>
+                  <select value={createForm.task_type} onChange={(e) => setCreateForm(c => ({...c, task_type: e.target.value}))}
+                    className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 text-sm font-bold outline-none uppercase tracking-wider">
+                    {TASK_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    disabled={!createForm.title?.trim() || busyAction !== null}
-                    onClick={handleCreateTask}
-                  >
-                    Create
-                  </button>
-                  <button
-                    className="rounded border border-border px-4 py-2 text-sm text-muted-foreground"
-                    onClick={() => setShowCreateForm(false)}
-                  >
-                    Cancel
-                  </button>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Priority Level</label>
+                  <select value={createForm.priority} onChange={(e) => setCreateForm(c => ({...c, priority: e.target.value}))}
+                    className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 text-sm font-bold outline-none uppercase tracking-wider">
+                    {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
                 </div>
               </div>
-            </SectionCard>
+
+              <div className="flex gap-4 pt-4">
+                <button onClick={handleCreateTask} disabled={!createForm.title.trim() || !!busyAction}
+                  className="px-8 h-12 bg-primary text-primary-foreground rounded-xl font-bold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 transition-all">
+                  Create Task
+                </button>
+                <button onClick={() => setShowCreateForm(false)} className="px-8 h-12 bg-white/5 text-foreground rounded-xl font-bold hover:bg-white/10 transition-all">
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         ) : selectedTask ? (
-          <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-5">
-            {detailLoading && (
-              <div className="rounded-lg border border-border bg-card px-4 py-2 text-xs text-muted-foreground">
-                Refreshing task detail…
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <header className="p-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-white/[0.02]">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3 mb-1">
+                  <span className="text-[10px] font-bold font-mono text-muted-foreground uppercase tracking-widest bg-white/5 px-2 py-0.5 rounded">{selectedTask.id}</span>
+                  <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", 
+                    STATUS_COLORS[normalizeStatus(selectedTask.status)] || "border-white/10 text-muted-foreground")}>
+                    {normalizeStatus(selectedTask.status).replace("_", " ")}
+                  </span>
+                </div>
+                <h2 className="text-2xl font-bold text-foreground truncate tracking-tight">{selectedTask.title}</h2>
               </div>
-            )}
-            <SectionCard
-              title={`${selectedTask.id} · ${selectedTask.title}`}
-              subtitle={`Assignee: ${assigneeSummary(selectedTask.assignee)} · Updated: ${formatDate(selectedTask.metadata?.updated_at)}`}
-            >
-              <div className="grid gap-3">
-                <input
-                  value={titleDraft}
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                  aria-label="Edit task title"
-                  className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <textarea
-                  value={descriptionDraft}
-                  onChange={(event) => setDescriptionDraft(event.target.value)}
-                  rows={7}
-                  aria-label="Edit task description"
-                  className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                  <span>Type: {selectedTask.type ?? "unknown"}</span>
-                  <span>Branch: {selectedTask.branch_name ?? "None"}</span>
-                  <span>Deadline: {formatDate(selectedTask.deadline)}</span>
-                  <span>Checklist: {selectedTask.checklist.length}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    disabled={busyAction !== null}
-                    onClick={handleSaveTaskDetails}
-                  >
-                    Save Title / Description
-                  </button>
-                </div>
+              <div className="flex items-center gap-4">
+                {busyAction && <span className="text-[10px] font-bold text-primary animate-pulse uppercase tracking-[0.2em]">{busyAction}</span>}
+                <button onClick={handleSaveTaskDetails} className="px-6 h-10 bg-primary text-primary-foreground rounded-xl text-sm font-bold hover:scale-[1.02] active:scale-[0.98] transition-all">
+                  Save Changes
+                </button>
               </div>
-            </SectionCard>
+            </header>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <SectionCard title="Status" subtitle="Use task-specific AO actions instead of raw CLI flags.">
-                <div className="flex gap-2">
-                  <select
-                    value={statusDraft}
-                    onChange={(event) => setStatusDraft(event.target.value)}
-                    aria-label="Select task status"
-                    className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-                  >
-                    {STATUS_OPTIONS.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
-                  </select>
-                  <button
-                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    disabled={busyAction !== null}
-                    onClick={handleSetStatus}
-                  >
-                    Apply
-                  </button>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Priority" subtitle="Tune scheduling pressure directly from the workbench.">
-                <div className="flex gap-2">
-                  <select
-                    value={priorityDraft}
-                    onChange={(event) => setPriorityDraft(event.target.value)}
-                    aria-label="Select task priority"
-                    className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-                  >
-                    {PRIORITY_OPTIONS.map((priority) => (
-                      <option key={priority} value={priority}>{priority}</option>
-                    ))}
-                  </select>
-                  <button
-                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    disabled={busyAction !== null}
-                    onClick={handleSetPriority}
-                  >
-                    Apply
-                  </button>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Assignee" subtitle="Assign humans or agents without dropping to the CLI.">
-                <div className="grid gap-2">
-                  <div className="grid grid-cols-[120px_1fr_auto] gap-2">
-                    <select
-                      value={assigneeTypeDraft}
-                      onChange={(event) => setAssigneeTypeDraft(event.target.value as "human" | "agent")}
-                      aria-label="Choose assignee type"
-                      className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-                    >
-                      <option value="human">human</option>
-                      <option value="agent">agent</option>
-                    </select>
-                    <input
-                      value={assigneeDraft}
-                      onChange={(event) => setAssigneeDraft(event.target.value)}
-                      placeholder={assigneeTypeDraft === "agent" ? "agent role" : "user id"}
-                      aria-label={assigneeTypeDraft === "agent" ? "Agent role" : "User id"}
-                      className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+              <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
+                <div className="space-y-10">
+                  <section className="space-y-4">
+                    <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/40 px-1">Description</h3>
+                    <textarea 
+                      value={descriptionDraft} 
+                      onChange={(e) => setDescriptionDraft(e.target.value)}
+                      rows={14}
+                      className="w-full bg-white/[0.02] border border-white/5 rounded-2xl p-6 text-base leading-relaxed outline-none focus:border-primary/20 transition-all resize-none shadow-inner"
                     />
-                    <button
-                      className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                      disabled={!assigneeDraft.trim() || busyAction !== null}
-                      onClick={handleAssign}
-                    >
-                      Assign
-                    </button>
+                  </section>
+
+                  <section className="space-y-4">
+                    <div className="flex items-center justify-between px-1">
+                      <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/40">Operational Checklist</h3>
+                      <span className="text-[10px] font-bold text-muted-foreground/30 tabular-nums">{selectedTask.checklist.filter(c => c.completed).length} / {selectedTask.checklist.length} COMPLETE</span>
+                    </div>
+                    <div className="space-y-2">
+                      {selectedTask.checklist.map((item) => (
+                        <div key={item.id} className="flex items-center gap-4 p-4 rounded-xl bg-white/[0.02] border border-white/5 group hover:border-white/10 transition-colors">
+                          <input type="checkbox" checked={item.completed} onChange={(e) => handleChecklistToggle(item, e.target.checked)}
+                            className="w-5 h-5 rounded-md border-white/10 bg-white/5 text-primary focus:ring-primary/50 transition-all cursor-pointer" />
+                          <span className={cn("text-sm font-medium transition-all", item.completed ? "text-muted-foreground/40 line-through" : "text-foreground/90")}>
+                            {item.description}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex gap-3 mt-6">
+                        <input value={newChecklistItem} onChange={(e) => setNewChecklistItem(e.target.value)}
+                          placeholder="Add operational requirement..." className="flex-1 h-11 bg-white/5 border border-white/5 rounded-xl px-4 text-sm outline-none focus:border-primary/50 transition-colors" />
+                        <button onClick={handleChecklistAdd} className="px-6 h-11 bg-white/10 text-foreground rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-white/20 transition-colors">Add</button>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                <aside className="space-y-6">
+                  <div className="sticky top-0 space-y-6">
+                    <DetailSection title="Lifecycle Control">
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/30 px-1">Operational Status</label>
+                          <select value={statusDraft} onChange={(e) => { setStatusDraft(e.target.value); }} onBlur={handleSetStatus}
+                            className="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-xs font-bold outline-none uppercase tracking-widest transition-colors focus:border-primary/30">
+                            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/30 px-1">Priority Weight</label>
+                          <select value={priorityDraft} onChange={(e) => { setPriorityDraft(e.target.value); }} onBlur={handleSetPriority}
+                            className="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-xs font-bold outline-none uppercase tracking-widest transition-colors focus:border-primary/30">
+                            {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    </DetailSection>
+
+                    <DetailSection title="Assignment">
+                      <div className="space-y-4">
+                        <div className="flex gap-2">
+                          <select value={assigneeTypeDraft} onChange={(e) => setAssigneeTypeDraft(e.target.value as "human" | "agent")}
+                            className="w-24 h-11 bg-white/5 border border-white/10 rounded-xl px-2 text-[10px] font-bold outline-none uppercase tracking-wider">
+                            <option value="human">Human</option>
+                            <option value="agent">Agent</option>
+                          </select>
+                          <input value={assigneeDraft} onChange={(e) => setAssigneeDraft(e.target.value)} placeholder="User or Role"
+                            className="flex-1 h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-xs outline-none focus:border-primary/50 transition-colors" />
+                        </div>
+                        <button onClick={handleAssign} className="w-full h-10 bg-white/10 text-foreground rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-white/20 transition-all active:scale-[0.98]">
+                          Update Assignee
+                        </button>
+                        <div className="px-1 text-[10px] text-muted-foreground/60 italic font-medium">
+                          Current: {assigneeSummary(selectedTask.assignee)}
+                        </div>
+                      </div>
+                    </DetailSection>
+
+                    <DetailSection title="Deadlines">
+                      <div className="space-y-4">
+                        <input type="datetime-local" value={deadlineDraft} onChange={(e) => setDeadlineDraft(e.target.value)}
+                          className="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-xs outline-none transition-colors focus:border-primary/30" />
+                        <div className="flex gap-3">
+                          <button onClick={() => handleSetDeadline(false)} className="flex-1 h-10 bg-primary/20 text-primary rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-primary/30 transition-all active:scale-[0.98]">Set</button>
+                          <button onClick={() => handleSetDeadline(true)} className="flex-1 h-10 bg-white/5 text-muted-foreground rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-white/10 transition-all active:scale-[0.98]">Clear</button>
+                        </div>
+                      </div>
+                    </DetailSection>
+
+                    <div className="p-5 rounded-2xl border border-white/5 bg-white/[0.01] space-y-4">
+                      <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/30">Task Metadata</h4>
+                      <div className="grid grid-cols-2 gap-y-4 gap-x-2">
+                        <MetaInfo label="Created" value={formatDate(selectedTask.metadata?.created_at)} />
+                        <MetaInfo label="Updated" value={formatDate(selectedTask.metadata?.updated_at)} />
+                        <MetaInfo label="Risk" value={selectedTask.risk || "Low"} />
+                        <MetaInfo label="Complexity" value={selectedTask.complexity || "Medium"} />
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-muted-foreground">Current: {assigneeSummary(selectedTask.assignee)}</div>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Deadline" subtitle="Set or clear the task deadline with AO’s deadline command.">
-                <div className="grid grid-cols-[1fr_auto_auto] gap-2">
-                  <input
-                    type="datetime-local"
-                    value={deadlineDraft}
-                    onChange={(event) => setDeadlineDraft(event.target.value)}
-                    aria-label="Task deadline"
-                    className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                  />
-                  <button
-                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    disabled={busyAction !== null}
-                    onClick={() => handleSetDeadline(false)}
-                  >
-                    Apply
-                  </button>
-                  <button
-                    className="rounded border border-border px-4 py-2 text-sm text-muted-foreground disabled:opacity-50"
-                    disabled={busyAction !== null}
-                    onClick={() => handleSetDeadline(true)}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </SectionCard>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-              <SectionCard title={`Checklist (${selectedTask.checklist.length})`} subtitle="Toggle items or add more checklist work.">
-                <div className="grid gap-2">
-                  {selectedTask.checklist.length === 0 && (
-                    <div className="text-sm text-muted-foreground">No checklist items yet.</div>
-                  )}
-                  {selectedTask.checklist.map((item) => (
-                    <label key={item.id} className="flex items-center gap-3 rounded border border-border bg-background px-3 py-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={item.completed}
-                        onChange={(event) => handleChecklistToggle(item, event.target.checked)}
-                      />
-                      <span className={cn(item.completed && "text-muted-foreground line-through")}>{item.description}</span>
-                    </label>
-                  ))}
-                  <div className="grid grid-cols-[1fr_auto] gap-2 pt-2">
-                    <input
-                      value={newChecklistItem}
-                      onChange={(event) => setNewChecklistItem(event.target.value)}
-                      placeholder="New checklist item"
-                      aria-label="New checklist item"
-                      className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                    />
-                    <button
-                      className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                      disabled={!newChecklistItem.trim() || busyAction !== null}
-                      onClick={handleChecklistAdd}
-                    >
-                      Add
-                    </button>
-                  </div>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Metadata" subtitle="High-signal fields from the AO task record.">
-                <div className="grid gap-2 text-sm">
-                  <MetaRow label="Created" value={formatDate(selectedTask.metadata?.created_at)} />
-                  <MetaRow label="Updated" value={formatDate(selectedTask.metadata?.updated_at)} />
-                  <MetaRow label="Started" value={formatDate(selectedTask.metadata?.started_at)} />
-                  <MetaRow label="Completed" value={formatDate(selectedTask.metadata?.completed_at)} />
-                  <MetaRow label="Risk" value={selectedTask.risk ?? "unknown"} />
-                  <MetaRow label="Scope" value={selectedTask.scope ?? "unknown"} />
-                  <MetaRow label="Complexity" value={selectedTask.complexity ?? "unknown"} />
-                  <MetaRow label="Worktree" value={selectedTask.worktree_path ?? "None"} />
-                </div>
-              </SectionCard>
+                </aside>
+              </div>
             </div>
           </div>
-        ) : detailLoading ? (
-          <div className="px-5 py-8 text-sm text-muted-foreground">Loading task detail...</div>
         ) : (
-          <div className="px-5 py-8 text-sm text-muted-foreground">
-            {projects.length === 0 ? "No AO projects discovered." : "Select a task or create a new one."}
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-12 space-y-6">
+            <div className="w-20 h-20 rounded-[2rem] border border-white/10 bg-white/[0.03] flex items-center justify-center text-3xl font-bold text-muted-foreground/20 shadow-2xl">
+              TK
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-foreground/40 tracking-tight">Workbench Idle</h3>
+              <p className="text-sm text-muted-foreground/30 max-w-sm leading-relaxed">Select an operational requirement from the backlog to manage its lifecycle or define a new project task.</p>
+            </div>
           </div>
         )}
-      </section>
+      </main>
     </div>
   );
 }
 
-function SectionCard({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3">
-        <h2 className="text-base font-semibold text-foreground">{title}</h2>
-        {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
-      </div>
+    <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5 space-y-5">
+      <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground/40">{title}</h4>
       {children}
-    </section>
-  );
-}
-
-function MetricCard({ label, value, tone = "text-foreground" }: { label: string; value: number | string; tone?: string }) {
-  return (
-    <div className="rounded border border-border bg-background px-3 py-2">
-      <div className={cn("text-lg font-semibold", tone)}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
     </div>
   );
 }
 
-function MetaRow({ label, value }: { label: string; value: string }) {
+function MetaInfo({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid grid-cols-[96px_1fr] gap-2 rounded border border-border bg-background px-3 py-2">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="break-words text-foreground">{value}</div>
+    <div className="flex flex-col gap-1 min-w-0">
+      <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-muted-foreground/30">{label}</span>
+      <span className="text-[11px] font-semibold text-foreground/60 truncate">{value}</span>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { MarkdownContent } from "./MarkdownContent";
 import { LogFlowEdge } from "./LogFlowEdge";
 import { LogFlowNode, type LogFlowNodeData } from "./LogFlowNode";
+import { getEventRunId, getPrimaryBody, getToolParams, getToolPaths } from "./lib/logEvent";
 import type { LogGroupMode } from "./LogEventList";
 import type { StreamEvent } from "./types";
 
@@ -78,31 +79,6 @@ interface LaneRecord {
   subtitle: string | null;
   events: GraphEventRecord[];
   bursts: BurstRecord[];
-}
-
-function getEventRunId(event: StreamEvent) {
-  return typeof event.run_id === "string"
-    ? event.run_id
-    : typeof event.meta?.run_id === "string"
-      ? event.meta.run_id
-      : null;
-}
-
-function getToolParams(event: StreamEvent) {
-  const params = event.meta && typeof event.meta === "object" ? event.meta.params : null;
-  return params && typeof params === "object" ? params as Record<string, unknown> : null;
-}
-
-function getPrimaryBody(event: StreamEvent) {
-  if (event.content && event.content.trim() && event.content !== event.msg) {
-    return event.content;
-  }
-
-  if (event.error && event.error.trim()) {
-    return event.error;
-  }
-
-  return event.msg;
 }
 
 function getGraphIdentity(event: StreamEvent, groupMode: LogGroupMode) {
@@ -302,6 +278,7 @@ function getJsonHighlights(jsonBlocks: unknown[]) {
 function buildInsights(event: StreamEvent): EventInsights {
   const body = getPrimaryBody(event);
   const toolParams = getToolParams(event);
+  const toolPaths = getToolPaths(event);
   const command = typeof toolParams?.command === "string" ? toolParams.command : null;
   const description = typeof toolParams?.description === "string" ? toolParams.description : null;
   const textPool = [
@@ -322,7 +299,7 @@ function buildInsights(event: StreamEvent): EventInsights {
     toolType: getToolType(event.tool),
     toolServer: getToolServer(event.tool),
     toolAction: getToolAction(event.tool),
-    files: extractFilePaths(textPool),
+    files: Array.from(new Set([...toolPaths, ...extractFilePaths(textPool)])).slice(0, 12),
     jsonBlocks: [...extractJsonBlocks(body), ...(event.error ? extractJsonBlocks(event.error) : [])],
     jsonHighlights: getJsonHighlights([...extractJsonBlocks(body), ...(event.error ? extractJsonBlocks(event.error) : [])]),
   };

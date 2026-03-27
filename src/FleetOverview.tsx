@@ -129,7 +129,6 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
   const totalQueue = projects.reduce((s, p) => s + (p.health?.queued_tasks || 0), 0);
   const totalTasks = projects.reduce((s, p) => s + (p.tasks?.total || 0), 0);
   const totalDone = projects.reduce((s, p) => s + (p.tasks?.done || 0), 0);
-  const totalWorkflows = projects.reduce((s, p) => s + p.workflows.length, 0);
 
   const statusData = Object.entries(
     projects.reduce<Record<string, number>>((acc, p) => {
@@ -146,6 +145,7 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
       done: p.tasks!.done, ready: p.tasks!.ready, backlog: p.tasks!.backlog,
       blocked: p.tasks!.blocked, in_progress: p.tasks!.in_progress,
     }));
+
   const attentionProjects = useMemo(() => {
     return projects
       .map((project) => ({
@@ -154,143 +154,143 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
       }))
       .filter(({ state }) => state.score >= 3)
       .sort((left, right) => right.state.score - left.state.score)
-      .slice(0, 4);
+      .slice(0, 3);
   }, [eventsByProjectRoot, projects]);
 
+  if (selected) {
+    return (
+      <ProjectDetail
+        project={selected}
+        events={eventsByProjectRoot.get(selected.root) ?? []}
+        onBack={() => setSelectedRoot(null)}
+      />
+    );
+  }
+
   return (
-    <div className={cn("h-full min-h-0", selected ? "overflow-hidden" : "overflow-auto px-4 pb-4 pt-3 sm:px-5 sm:pb-5")}>
-      {!selected ? (
-        <>
-          <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-            <KPI label="Projects" value={projects.length} />
-            <KPI label="Agents" value={`${totalAgents}/${totalPool}`} />
-            <KPI label="Workflows" value={totalWorkflows} />
-            <KPI label="Queued" value={totalQueue} tone={totalQueue > 20 ? "warning" : "default"} />
-            <KPI label="Tasks Done" value={totalDone} />
-            <KPI label="Total Tasks" value={totalTasks} />
-          </div>
+    <div className="h-full overflow-y-auto custom-scrollbar">
+      <div className="max-w-[1600px] mx-auto p-6 space-y-8">
+        {/* KPI Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KPICard label="Total Projects" value={projects.length} />
+          <KPICard label="Active Agents" value={`${totalAgents}/${totalPool}`} />
+          <KPICard label="Total Tasks" value={totalTasks} />
+          <KPICard label="Fleet Queue" value={totalQueue} tone={totalQueue > 20 ? "warning" : "default"} />
+        </div>
 
-          {attentionProjects.length > 0 && (
-            <section className="mb-5 rounded-[20px] border border-white/10 bg-[linear-gradient(135deg,hsla(220,22%,15%,0.96),hsla(220,20%,10%,0.98))] p-4 shadow-[0_20px_44px_rgba(0,0,0,0.18)]">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Attention lane</div>
-                  <div className="mt-1 text-lg font-semibold text-foreground">Start with the projects that need intervention now.</div>
-                </div>
-                <div className="text-[12px] text-muted-foreground">Prioritized by daemon failure, blocked work, queue pressure, and recent errors.</div>
-              </div>
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                {attentionProjects.map(({ project, state }) => (
-                  <button
-                    key={`${project.root}:attention`}
-                    type="button"
-                    onClick={() => setSelectedRoot(project.root)}
-                    className="rounded-[18px] border border-white/10 bg-black/20 px-4 py-3 text-left transition-colors hover:border-primary/30 hover:bg-black/30"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-foreground">{project.name}</div>
-                        <div className="mt-1 text-[13px] leading-5 text-muted-foreground">{state.summary}</div>
-                      </div>
-                      <span className={cn("rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]", stateToneClasses(state.tone))}>
-                        {state.label}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-                      <span>{project.health?.queued_tasks ?? 0} queued</span>
-                      <span>{project.tasks?.blocked ?? 0} blocked</span>
-                      <span>{project.workflows.length} active workflows</span>
-                    </div>
-                    <div className="mt-2 text-[11px] font-medium text-foreground">{state.action}</div>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {globalAoInfo && <GlobalAoPanel info={globalAoInfo} />}
-
-          <div className="mb-5 grid gap-5 xl:grid-cols-[240px_minmax(0,1fr)]">
-            <div className="bg-card rounded-xl p-4 border border-border">
-              <h3 className="text-xs text-muted-foreground mb-2 uppercase tracking-wide font-semibold">Daemon Status</h3>
-              <ResponsiveContainer width="100%" height={150}>
-                <PieChart>
-                  <Pie data={statusData} dataKey="value" cx="50%" cy="50%" innerRadius={30} outerRadius={55}>
-                    {statusData.map((d) => (<Cell key={d.name} fill={STATUS_COLORS[d.name] || "#333"} />))}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: "hsl(220 16% 11%)", border: "1px solid hsl(220 14% 22%)", borderRadius: 8 }} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="flex gap-2 justify-center flex-wrap">
-                {statusData.map((d) => (
-                  <span key={d.name} className="text-[10px]" style={{ color: STATUS_COLORS[d.name] }}>{d.name}: {d.value}</span>
-                ))}
+        {/* Attention Lane */}
+        {attentionProjects.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-end justify-between px-1">
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-widest text-primary/80">Attention Required</h3>
+                <p className="text-sm text-muted-foreground mt-1">Projects requiring immediate operator intervention.</p>
               </div>
             </div>
-            <div className="bg-card rounded-xl p-4 border border-border">
-              <h3 className="text-xs text-muted-foreground mb-2 uppercase tracking-wide font-semibold">Task Distribution</h3>
-              <ResponsiveContainer width="100%" height={170}>
-                <BarChart data={taskBarData} barSize={16}>
-                  <XAxis dataKey="name" tick={{ fill: "#8b93a3", fontSize: 10 }} />
-                  <YAxis tick={{ fill: "#8b93a3", fontSize: 10 }} />
-                  <Tooltip contentStyle={{ background: "hsl(220 16% 11%)", border: "1px solid hsl(220 14% 22%)", borderRadius: 8, fontSize: 12 }} />
-                  <Bar dataKey="done" stackId="a" fill={TASK_COLORS.done} />
-                  <Bar dataKey="ready" stackId="a" fill={TASK_COLORS.ready} />
-                  <Bar dataKey="in_progress" stackId="a" fill={TASK_COLORS.in_progress} />
-                  <Bar dataKey="backlog" stackId="a" fill={TASK_COLORS.backlog} />
-                  <Bar dataKey="blocked" stackId="a" fill={TASK_COLORS.blocked} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-[20px] border border-white/10 bg-[linear-gradient(180deg,hsla(219,22%,14%,0.98),hsla(220,22%,10%,0.98))]">
-            <div className="hidden grid-cols-[minmax(0,1.4fr)_120px_160px_160px_150px_90px] gap-3 border-b border-white/8 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground md:grid">
-              <div>Project</div>
-              <div>State</div>
-              <div>Pressure</div>
-              <div>Active runs</div>
-              <div>Task mix</div>
-              <div />
-            </div>
-            <div className="divide-y divide-white/8">
-              {projects.map((p) => (
-                <OverviewProjectRow
-                  key={p.root}
-                  project={p}
-                  events={eventsByProjectRoot.get(p.root) ?? []}
-                  onClick={() => setSelectedRoot(p.root)}
-                />
+            <div className="grid gap-4 md:grid-cols-3">
+              {attentionProjects.map(({ project, state }) => (
+                <button
+                  key={`${project.root}:attention`}
+                  onClick={() => setSelectedRoot(project.root)}
+                  className="group relative flex flex-col p-5 text-left rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 transition-all duration-300"
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{project.name}</span>
+                    <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", stateToneClasses(state.tone))}>
+                      {state.label}
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-2 flex-1 mb-4">{state.summary}</p>
+                  <div className="pt-4 border-t border-white/5 flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground">{state.action}</span>
+                    <span className="text-muted-foreground">Open →</span>
+                  </div>
+                </button>
               ))}
             </div>
+          </section>
+        )}
+
+        {/* Charts & System Panel */}
+        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+          <div className="space-y-6">
+            <div className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <h3 className="text-sm font-bold text-foreground mb-6">Project Activity & Task Distribution</h3>
+              <div className="h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={taskBarData} barSize={20}>
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
+                    <Tooltip 
+                      cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                      contentStyle={{ background: "#0f1115", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px" }}
+                    />
+                    <Bar dataKey="done" stackId="a" fill={TASK_COLORS.done} radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="ready" stackId="a" fill={TASK_COLORS.ready} />
+                    <Bar dataKey="in_progress" stackId="a" fill={TASK_COLORS.in_progress} />
+                    <Bar dataKey="blocked" stackId="a" fill={TASK_COLORS.blocked} radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Project List */}
+            <div className="rounded-2xl border border-white/5 bg-card/20 overflow-hidden">
+              <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">All Fleet Projects</h3>
+                <span className="text-xs text-muted-foreground">{projects.length} connected</span>
+              </div>
+              <div className="divide-y divide-white/5">
+                {projects.map((p) => (
+                  <OverviewProjectRow
+                    key={p.root}
+                    project={p}
+                    events={eventsByProjectRoot.get(p.root) ?? []}
+                    onClick={() => setSelectedRoot(p.root)}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
-        </>
-      ) : (
-        <ProjectDetail
-          project={selected}
-          events={eventsByProjectRoot.get(selected.root) ?? []}
-          onBack={() => setSelectedRoot(null)}
-        />
-      )}
+
+          <aside className="space-y-6">
+            {globalAoInfo && <GlobalAoPanel info={globalAoInfo} />}
+            
+            <div className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <h3 className="text-sm font-bold text-foreground mb-4">Daemon Health</h3>
+              <div className="h-[180px] flex items-center justify-center">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={statusData} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={70} stroke="none">
+                      {statusData.map((d) => (<Cell key={d.name} fill={STATUS_COLORS[d.name] || "#333"} />))}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: "#0f1115", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px" }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {statusData.map((d) => (
+                  <div key={d.name} className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full" style={{ background: STATUS_COLORS[d.name] }} />
+                    <span className="text-muted-foreground capitalize">{d.name}</span>
+                    <span className="ml-auto font-medium">{d.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
     </div>
   );
 }
 
-function KPI({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string | number;
-  tone?: "default" | "warning" | "critical";
-}) {
-  const valueClass = tone === "warning" ? "text-chart-4" : tone === "critical" ? "text-chart-5" : "text-foreground";
-
+function KPICard({ label, value, tone = "default" }: { label: string; value: string | number; tone?: "default" | "warning" | "critical" }) {
+  const toneClass = tone === "warning" ? "text-chart-4" : tone === "critical" ? "text-chart-5" : "text-primary";
   return (
-    <div className="bg-card rounded-lg border border-border p-3">
-      <div className={cn("text-xl font-bold", valueClass)}>{value}</div>
-      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
+    <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-6 backdrop-blur-sm">
+      <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{label}</div>
+      <div className={cn("text-2xl font-bold", toneClass)}>{value}</div>
     </div>
   );
 }
@@ -300,91 +300,48 @@ function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
   const templates = info.workflow_templates.slice(0, 6);
 
   return (
-    <div className="bg-card rounded-xl p-4 border border-border mb-5">
-      <div className="flex items-start justify-between gap-4 mb-3">
+    <div className="rounded-2xl border border-white/5 bg-card/20 p-6 space-y-6">
+      <div className="flex items-start justify-between">
         <div>
-          <h3 className="text-xs text-muted-foreground uppercase tracking-wide font-semibold">AO Home</h3>
-          <div className="mt-1 font-mono text-[11px] text-muted-foreground">{info.ao_home}</div>
-        </div>
-        <div className="flex gap-2 flex-wrap justify-end">
-          <MiniStat label="Sync" value={info.sync.configured ? "On" : "Off"} tone={info.sync.configured ? "text-chart-1" : "text-chart-4"} />
-          <MiniStat label="Runner Token" value={info.agent_runner_token_configured ? "Set" : "Missing"} tone={info.agent_runner_token_configured ? "text-chart-1" : "text-muted-foreground"} />
-          <MiniStat label="Providers" value={`${configuredProviders.length}/${info.providers.length}`} tone="text-foreground" />
-          <MiniStat label="Templates" value={info.workflow_templates.length} tone="text-foreground" />
+          <h3 className="text-sm font-bold text-foreground mb-1">AO Home</h3>
+          <div className="font-mono text-[11px] text-muted-foreground break-all">{info.ao_home}</div>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Sync</div>
-          <div className="text-sm font-semibold text-foreground">{info.sync.server ? shortUrl(info.sync.server) : "Not configured"}</div>
-          <div className="text-[11px] text-muted-foreground mt-1">
-            {info.sync.project_id ? `Project ${info.sync.project_id}` : "No linked project"}
-          </div>
-          <div className="mt-2 text-[10px] text-muted-foreground">
-            Last sync {info.sync.last_synced_at ? info.sync.last_synced_at : "not recorded"}
+      <div className="grid gap-3">
+        <MiniStat label="Sync" value={info.sync.configured ? "Online" : "Local"} tone={info.sync.configured ? "text-chart-1" : "text-muted-foreground"} />
+        <MiniStat label="Runner" value={info.agent_runner_token_configured ? "Active" : "None"} tone={info.agent_runner_token_configured ? "text-chart-1" : "text-muted-foreground"} />
+        <MiniStat label="Providers" value={`${configuredProviders.length}/${info.providers.length}`} tone="text-foreground" />
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-2">Providers</h4>
+          <div className="space-y-2">
+            {info.providers.slice(0, 3).map((provider) => (
+              <div key={provider.name} className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{provider.name}</span>
+                <span className={cn("px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold", provider.configured ? "bg-chart-1/10 text-chart-1" : "bg-white/5 text-muted-foreground")}>
+                  {provider.configured ? "ON" : "OFF"}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Providers</div>
-          <div className="flex flex-col gap-1.5">
-            {info.providers.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground">No credential providers</div>
-            ) : (
-              info.providers.slice(0, 6).map((provider) => (
-                <div key={provider.name} className="flex items-center gap-2 text-[11px] min-w-0">
-                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", provider.configured ? "bg-chart-1" : "bg-muted-foreground/30")} />
-                  <span className="font-semibold text-foreground shrink-0">{provider.name}</span>
-                  <span className="truncate text-muted-foreground">{shortUrl(provider.base_url)}</span>
+        <div>
+          <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-2">Logs</h4>
+          <div className="space-y-2">
+            {info.logs.slice(0, 2).map((log) => (
+              <div key={log.name} className="text-[11px]">
+                <div className="flex justify-between text-muted-foreground mb-1">
+                  <span>{log.name}</span>
+                  <span>{formatBytes(log.size_bytes)}</span>
                 </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Global Workflows</div>
-          <div className="flex flex-col gap-2">
-            {templates.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground">No shared workflow templates</div>
-            ) : (
-              templates.map((workflow) => (
-                <div key={`${workflow.source_file}:${workflow.id}`} className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-semibold text-foreground truncate">{workflow.id}</span>
-                    <span className="shrink-0 text-[9px] text-muted-foreground">{workflow.phase_count} phases</span>
+                {log.recent_lines.length > 0 && (
+                  <div className="bg-black/20 rounded p-2 font-mono text-[10px] text-muted-foreground/80 truncate">
+                    {log.recent_lines[log.recent_lines.length - 1]}
                   </div>
-                  <div className="text-[10px] text-muted-foreground truncate">
-                    {workflow.name || workflow.description || workflow.source_file}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="bg-background rounded-lg border border-border p-3 min-w-0">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Top-Level Logs</div>
-          <div className="flex flex-col gap-2">
-            {info.logs.map((log) => (
-              <div key={log.name} className="min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold text-foreground">{log.name}</span>
-                  <span className="shrink-0 text-[9px] text-muted-foreground">
-                    {log.exists ? `${formatBytes(log.size_bytes)} · ${formatTimestamp(log.modified_at_ms)}` : "missing"}
-                  </span>
-                </div>
-                {log.recent_lines.length > 0 ? (
-                  <div className="mt-1 flex flex-col gap-0.5">
-                    {log.recent_lines.map((line, index) => (
-                      <div key={`${log.name}:${index}`} className="truncate font-mono text-[10px] text-muted-foreground">
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-1 text-[10px] text-muted-foreground">No recent lines</div>
                 )}
               </div>
             ))}
@@ -397,20 +354,16 @@ function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
 
 function MiniStat({ label, value, tone }: { label: string; value: string | number; tone: string }) {
   return (
-    <div className="px-2.5 py-1.5 rounded-md border border-border bg-background text-right">
-      <div className={cn("text-sm font-semibold", tone)}>{value}</div>
-      <div className="text-[9px] text-muted-foreground uppercase tracking-wide">{label}</div>
+    <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 border border-white/5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={cn("text-xs font-bold", tone)}>{value}</span>
     </div>
   );
 }
 
 function shortUrl(value?: string) {
   if (!value) return "Unknown";
-  try {
-    return new URL(value).host;
-  } catch {
-    return value;
-  }
+  try { return new URL(value).host; } catch { return value; }
 }
 
 function formatBytes(bytes: number) {
@@ -422,10 +375,7 @@ function formatBytes(bytes: number) {
 function formatTimestamp(value?: number) {
   if (!value) return "unknown";
   return new Date(value).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
 
@@ -444,56 +394,35 @@ function getProjectState(project: FleetProject, events: StreamEvent[]) {
       tone: "failed" as const,
       label: status === "crashed" ? "Daemon crashed" : "Offline",
       summary: status === "crashed" ? "The daemon surface is down and needs intervention." : "No daemon surface is available for this project.",
-      action: "Inspect recent failures before resuming work.",
-      score: 5,
+      action: "Inspect failures", score: 5,
     };
   }
 
   if (blockedTasks > 0 || queueDepth > 25) {
     return {
-      tone: "blocked" as const,
-      label: "Needs intervention",
-      summary: blockedTasks > 0
-        ? `${blockedTasks} blocked task${blockedTasks === 1 ? "" : "s"} are stopping forward progress.`
-        : `${queueDepth} queued subjects are building faster than they are being cleared.`,
-      action: "Open Task Workbench and unblock or reprioritize work.",
-      score: 4,
+      tone: "blocked" as const, label: "Needs intervention",
+      summary: blockedTasks > 0 ? `${blockedTasks} blocked tasks stopping progress.` : `${queueDepth} queued subjects building up.`,
+      action: "Unblock tasks", score: 4,
     };
   }
 
   if (!project.health?.healthy || errorCount > 0 || utilization > 85) {
     return {
-      tone: "degraded" as const,
-      label: "Watch closely",
-      summary: errorCount > 0
-        ? `${errorCount} recent error event${errorCount === 1 ? "" : "s"} need a quick read.`
-        : utilization > 85
-          ? `Agent capacity is running hot at ${Math.round(utilization)}% utilization.`
-          : "The daemon is running but health signals are trending noisy.",
-      action: "Use Event Stream to confirm whether this is transient or worsening.",
-      score: 3,
+      tone: "degraded" as const, label: "Watch closely",
+      summary: errorCount > 0 ? `${errorCount} recent errors detected.` : utilization > 85 ? `High utilization: ${Math.round(utilization)}%.` : "Noisy health signals.",
+      action: "Check stream", score: 3,
     };
   }
 
   if (activeRuns > 0 || (project.health?.active_agents ?? 0) > 0) {
     return {
-      tone: "healthy" as const,
-      label: "Operating normally",
-      summary: activeRuns > 0
-        ? `${activeRuns} active workflow${activeRuns === 1 ? "" : "s"} are progressing without obvious blockers.`
-        : "Agents are active and the daemon surface looks healthy.",
-      action: "Keep monitoring current runs and queue pressure.",
-      score: 2,
+      tone: "healthy" as const, label: "Operating normally",
+      summary: activeRuns > 0 ? `${activeRuns} active workflows progressing.` : "Agents active and healthy.",
+      action: "Monitor runs", score: 2,
     };
   }
 
-  return {
-    tone: "idle" as const,
-    label: "Ready",
-    summary: "No active pressure right now, but the project is available for new work.",
-    action: "Use Command Center or Tasks to start the next operation.",
-    score: 1,
-  };
+  return { tone: "idle" as const, label: "Ready", summary: "Project available for new work.", action: "Start operation", score: 1 };
 }
 
 function stateToneClasses(tone: ProjectStateTone) {
@@ -501,97 +430,50 @@ function stateToneClasses(tone: ProjectStateTone) {
   if (tone === "blocked") return "border-chart-4/40 bg-chart-4/10 text-chart-4";
   if (tone === "degraded") return "border-primary/40 bg-primary/10 text-primary";
   if (tone === "healthy") return "border-chart-1/40 bg-chart-1/10 text-chart-1";
-  return "border-border bg-background text-muted-foreground";
+  return "border-white/10 bg-white/5 text-muted-foreground";
 }
+
 
 function OverviewProjectRow({ project: p, events, onClick }: { project: FleetProject; events: StreamEvent[]; onClick: () => void }) {
   const status = p.health?.status || "offline";
   const state = getProjectState(p, events);
-  const recentEvents = events.slice(-2);
   const queueDepth = p.health?.queued_tasks || 0;
   const utilization = Math.round(p.health?.pool_utilization_percent || 0);
-  const blocked = p.tasks?.blocked || 0;
-  const inProgress = p.tasks?.in_progress || 0;
-  const ready = p.tasks?.ready || 0;
-  const backlog = p.tasks?.backlog || 0;
 
   return (
     <button
-      type="button"
       onClick={onClick}
-      className="group w-full px-4 py-4 text-left transition-colors hover:bg-white/[0.035]"
-      aria-label={`Open ${p.name} project detail`}
+      className="w-full grid grid-cols-[1fr_120px_160px_100px] items-center gap-6 px-6 py-5 text-left hover:bg-white/[0.03] transition-colors group"
     >
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_160px_160px_150px_90px] md:items-center">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold text-foreground">{p.name}</span>
-            <span className="text-[11px] text-muted-foreground">{status}</span>
-          </div>
-          <div className="mt-1 text-[13px] leading-5 text-muted-foreground">{state.summary}</div>
-          {recentEvents.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {recentEvents.map((event, index) => (
-                <div
-                  key={getEventKey(event, index)}
-                  className={cn(
-                    "overflow-hidden text-ellipsis whitespace-nowrap text-[11px]",
-                    event.level === "error" ? "text-chart-5" : event.level === "warn" ? "text-chart-4" : "text-muted-foreground",
-                  )}
-                >
-                  {event.msg.slice(0, 90)}
-                </div>
-              ))}
-            </div>
-          )}
+      <div className="min-w-0">
+        <div className="flex items-center gap-3">
+          <span className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{p.name}</span>
+          <span className="text-xs text-muted-foreground font-medium">{status}</span>
         </div>
+        <div className="mt-1 text-sm text-muted-foreground line-clamp-1">{state.summary}</div>
+      </div>
 
-        <div>
-          <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]", stateToneClasses(state.tone))}>
-            {state.label}
-          </span>
-        </div>
+      <div className="flex justify-center">
+        <span className={cn("px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider border", stateToneClasses(state.tone))}>
+          {state.label}
+        </span>
+      </div>
 
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Queue</span>
-            <span className={cn("font-semibold", queueDepth > 10 ? "text-chart-4" : "text-foreground")}>{queueDepth}</span>
-          </div>
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Utilization</span>
-            <span className="font-semibold text-foreground">{utilization}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-secondary">
-            <div
-              className="h-full transition-all duration-500"
-              style={{
-                width: `${p.health?.pool_utilization_percent || 0}%`,
-                background: (p.health?.pool_utilization_percent || 0) > 80 ? "#c3893d" : "#6d83a6",
-              }}
-            />
-          </div>
+      <div className="space-y-2">
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">Queue</span>
+          <span className={cn("font-bold", queueDepth > 10 ? "text-chart-4" : "text-foreground")}>{queueDepth}</span>
         </div>
+        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+          <div 
+            className={cn("h-full rounded-full transition-all duration-500", utilization > 80 ? "bg-chart-4" : "bg-primary")}
+            style={{ width: `${utilization}%` }}
+          />
+        </div>
+      </div>
 
-        <div className="space-y-1 text-[11px]">
-          {p.workflows.slice(0, 2).map((wf, index) => (
-            <div key={`${wf.id}:${index}`} className="overflow-hidden text-ellipsis whitespace-nowrap text-foreground">
-              {wf.workflow_ref} <span className="text-muted-foreground">→ {wf.current_phase}</span>
-            </div>
-          ))}
-          {p.workflows.length === 0 && <div className="text-muted-foreground">No active workflows</div>}
-          {p.workflows.length > 2 && <div className="text-muted-foreground">+{p.workflows.length - 2} more active runs</div>}
-        </div>
-
-        <div className="space-y-1 text-[11px] text-muted-foreground">
-          <div>Blocked <span className={cn("font-semibold", blocked > 0 ? "text-chart-4" : "text-foreground")}>{blocked}</span></div>
-          <div>In progress <span className="font-semibold text-foreground">{inProgress}</span></div>
-          <div>Ready <span className="font-semibold text-foreground">{ready}</span></div>
-          <div>Backlog <span className="font-semibold text-foreground">{backlog}</span></div>
-        </div>
-
-        <div className="flex items-center justify-start md:justify-end">
-          <span className="text-[11px] font-medium text-foreground transition-colors group-hover:text-primary">Open →</span>
-        </div>
+      <div className="text-right text-xs font-bold text-muted-foreground group-hover:text-primary transition-colors">
+        OPEN →
       </div>
     </button>
   );
@@ -618,11 +500,9 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
     () => selectProjectStreamEvents(projectEvents, streamFilter, levelFilter),
     [levelFilter, projectEvents, streamFilter],
   );
-  const activeRunsFilter = useMemo<ActiveRunsStreamFilter | null>(() => {
-    if (p.workflows.length === 0) {
-      return null;
-    }
 
+  const activeRunsFilter = useMemo<ActiveRunsStreamFilter | null>(() => {
+    if (p.workflows.length === 0) return null;
     return {
       type: "active-runs",
       workflowIds: [...new Set(p.workflows.map((wf) => wf.id).filter(Boolean))],
@@ -631,25 +511,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
       label: "ACTIVE RUNS",
     };
   }, [p.workflows]);
+
   const liveStreamParams = useMemo(() => {
-    if (streamFilter.type === "active-runs" || streamFilter.type === "run") {
-      return {
-        workflow: null,
-        run: null,
-      };
-    }
-
-    if (streamFilter.type === "workflow") {
-      return {
-        workflow: streamFilter.value,
-        run: null,
-      };
-    }
-
-    return {
-      workflow: null,
-      run: null,
-    };
+    if (streamFilter.type === "workflow") return { workflow: streamFilter.value, run: null };
+    return { workflow: null, run: null };
   }, [streamFilter]);
 
   useEffect(() => {
@@ -659,27 +524,19 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   }, [p.root]);
 
   useEffect(() => {
-    if (viewMode !== "stream") {
-      return;
-    }
-
+    if (viewMode !== "stream") return;
     setStreamEvents((prev) => {
-      if (!streamLoading && !streamError && prev.length > 0) {
-        return prev;
-      }
-
+      if (!streamLoading && !streamError && prev.length > 0) return prev;
       return mergeStreamEvents(fallbackStreamEvents, prev, PROJECT_DETAIL_MAX_EVENTS);
     });
   }, [fallbackStreamEvents, streamError, streamLoading, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "stream") return;
-
     let disposed = false;
     let activeChannelId: string | null = null;
     let unlisten: (() => void) | null = null;
     const seedEvents = selectProjectStreamEvents(projectEvents, streamFilter, levelFilter);
-
     setStreamLoading(true);
     setStreamError(null);
     setStreamEvents(seedEvents);
@@ -694,15 +551,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
 
     const connect = async () => {
       let nextError: string | null = null;
-
       try {
         const recent = await invoke<StreamEvent[]>("get_filtered_events", streamRequest);
-        if (!disposed) {
-          setStreamEvents(mergeStreamEvents(seedEvents, recent, PROJECT_DETAIL_MAX_EVENTS));
-        }
-      } catch (error) {
-        nextError = `Recent events unavailable: ${String(error)}`;
-      }
+        if (!disposed) setStreamEvents(mergeStreamEvents(seedEvents, recent, PROJECT_DETAIL_MAX_EVENTS));
+      } catch (error) { nextError = `Recent events unavailable: ${String(error)}`; }
 
       try {
         const channelId = await invoke<string>("start_filtered_stream", streamRequest);
@@ -710,9 +562,7 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
           await invoke("stop_filtered_stream", { channelId }).catch(() => {});
           return;
         }
-
         activeChannelId = channelId;
-
         unlisten = await listen<StreamEvent>(channelId, (event) => {
           setStreamEvents((prev) => mergeStreamEvents(prev, [event.payload], PROJECT_DETAIL_MAX_EVENTS));
         });
@@ -725,15 +575,11 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
         }
       }
     };
-
     connect();
-
     return () => {
       disposed = true;
       if (unlisten) unlisten();
-      if (activeChannelId) {
-        invoke("stop_filtered_stream", { channelId: activeChannelId }).catch(() => {});
-      }
+      if (activeChannelId) invoke("stop_filtered_stream", { channelId: activeChannelId }).catch(() => {});
     };
   }, [levelFilter, liveStreamParams, p.root, streamFilter, viewMode]);
 
@@ -748,21 +594,10 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
     return refs;
   }, [p.workflows, projectEvents]);
 
-  const modelNames = useMemo(() => {
-    const models = new Map<string, number>();
-    projectEvents.forEach((event) => {
-      if (event.model) models.set(event.model, (models.get(event.model) || 0) + 1);
-    });
-    return models;
-  }, [projectEvents]);
-
   const filtered = useMemo(() => {
     const query = textFilter.trim().toLowerCase();
     return streamEvents.filter((event) => {
-      if (!matchesLevelFilter(event, levelFilter) || !matchesStreamFilter(event, streamFilter)) {
-        return false;
-      }
-
+      if (!matchesLevelFilter(event, levelFilter) || !matchesStreamFilter(event, streamFilter)) return false;
       if (query) {
         const haystack = `${event.msg} ${event.content ?? ""} ${event.error ?? ""} ${event.cat} ${event.tool ?? ""} ${event.workflow_ref ?? ""} ${event.workflow_id ?? ""} ${event.task_id ?? ""} ${getEventRunId(event) ?? ""}`.toLowerCase();
         if (!haystack.includes(query)) return false;
@@ -781,257 +616,147 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
     setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
   };
 
-  const tabBtn = (mode: typeof viewMode, label: string, extra?: string) => (
-    <button type="button" onClick={() => setViewMode(mode)} className={cn(
-      "px-3 py-1 rounded text-[11px] border transition-colors cursor-pointer",
-      viewMode === mode ? "bg-primary/12 border-primary/40 text-foreground" : "bg-transparent border-border text-muted-foreground hover:text-foreground"
-    )}>{label}{extra || ""}</button>
-  );
-
-  const sidebarItem = (label: string, count: number, active: boolean, onClick: () => void, dot?: string) => (
-    <button type="button" onClick={onClick} className={cn(
-      "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[11px]",
-      active ? "bg-primary/12 text-foreground" : "text-muted-foreground hover:text-foreground"
-    )}>
-      {dot && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} />}
-      <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
-      <span className="text-[9px] text-muted-foreground/50 shrink-0">{count}</span>
-    </button>
-  );
-
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
-      <div className="shrink-0 px-5 pt-3">
-        <button onClick={onBack} className="mb-3 px-3 py-1.5 rounded border border-border text-muted-foreground text-xs cursor-pointer hover:text-foreground hover:border-primary/30 transition-colors">
-          ← Back to Fleet
-        </button>
-
-        <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-xl font-bold">{p.name}</h2>
-          <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded" style={{
-            background: `${STATUS_COLORS[p.health?.status || "offline"]}24`,
-            color: STATUS_COLORS[p.health?.status || "offline"],
-          }}>{p.health?.status || "offline"}</span>
-        </div>
-
-        <div className="mb-3 grid grid-cols-2 gap-2.5 xl:grid-cols-5">
-          <KPI label="Agents" value={`${p.health?.active_agents || 0}/${p.health?.pool_size || 0}`} />
-          <KPI label="Queue" value={p.health?.queued_tasks || 0} tone={(p.health?.queued_tasks || 0) > 10 ? "warning" : "default"} />
-          <KPI label="Workflows" value={p.workflows.length} />
-          <KPI label="Tasks Done" value={p.tasks?.done || 0} />
-          <KPI label="Total Tasks" value={p.tasks?.total || 0} />
-        </div>
-
-        {p.tasks && (
-          <div className="flex gap-3 mb-3 flex-wrap">
-            {Object.entries(TASK_COLORS).map(([status, color]) => {
-              const count = (p.tasks as unknown as Record<string, number>)?.[status] || 0;
-              if (count === 0) return null;
-              return (
-                <div key={status} className="flex items-center gap-1">
-                  <span className="text-sm font-bold" style={{ color }}>{count}</span>
-                  <span className="text-[10px] text-muted-foreground">{status}</span>
-                </div>
-              );
-            })}
+    <div className="h-full flex flex-col bg-background/50">
+      <header className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 -ml-2 rounded-lg hover:bg-white/5 transition-colors text-muted-foreground hover:text-foreground">
+            ←
+          </button>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-foreground flex items-center gap-3">
+              {p.name}
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", 
+                p.health?.status === "running" ? "border-chart-1/30 bg-chart-1/10 text-chart-1" : "border-white/10 bg-white/5 text-muted-foreground")}>
+                {p.health?.status || "offline"}
+              </span>
+            </h2>
           </div>
-        )}
-      </div>
-
-      <div className="flex gap-1.5 px-5 pb-2 shrink-0">
-        {tabBtn("stream", "Stream")}
-        {tabBtn("config", "Config")}
-        {tabBtn("tasks", "Tasks", taskList.length > 0 ? ` (${taskList.length})` : "")}
-        {tabBtn("commits", "Commits")}
-      </div>
-
-      {viewMode === "config" && config ? (
-        <ConfigView config={config} />
-      ) : viewMode === "tasks" ? (
-        <TasksView tasks={taskList} />
-      ) : viewMode === "commits" ? (
-        <CommitsView commits={commits} />
-      ) : (
-      <div className="flex-1 grid min-h-0 gap-2.5 overflow-hidden px-5 pb-3 xl:grid-cols-[180px_minmax(0,1fr)]">
-        <div className="bg-card rounded-lg p-2.5 overflow-auto min-w-0 border border-border">
-          {sidebarItem("All Events", projectEvents.length, streamFilter.type === "all", () => setStreamFilter({ type: "all" }), "#6d83a6")}
-
-          {workflowRefs.size > 0 && (
-            <>
-              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Workflows</div>
-              {[...workflowRefs].map(([ref, { count, active }]) =>
-                sidebarItem(ref, count, streamFilter.type === "workflow" && streamFilter.value === ref,
-                  () => setStreamFilter({ type: "workflow", value: ref }),
-                  active ? "#5d9a80" : "#5a6474")
-              )}
-            </>
-          )}
-
-          {modelNames.size > 0 && (
-            <>
-              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Models</div>
-              {[...modelNames].map(([name, count]) => (
-                <div key={name} className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-muted-foreground">
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary/60 shrink-0" />
-                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{name.replace("kimi-code/", "")}</span>
-                  <span className="text-[9px] text-muted-foreground/50">{count}</span>
-                </div>
-              ))}
-            </>
-          )}
-
-          {p.workflows.length > 0 && (
-            <>
-              <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wide pt-2.5 px-2 pb-1 font-semibold">Active Runs</div>
-              {activeRunsFilter && sidebarItem(
-                activeRunsFilter.label,
-                p.workflows.length,
-                streamFilter.type === "active-runs",
-                () => setStreamFilter(activeRunsFilter),
-                "#5d9a80",
-              )}
-              {p.workflows.map((wf) => (
-                <button
-                  type="button"
-                  key={wf.id}
-                  onClick={() => setStreamFilter({
-                    type: "run",
-                    workflowId: wf.id,
-                    taskId: wf.task_id !== "cron" ? wf.task_id : undefined,
-                    workflowRef: wf.workflow_ref,
-                    label: `${wf.workflow_ref} → ${wf.current_phase}`,
-                  })}
-                  className={cn(
-                    "w-full rounded px-2 py-1 text-left text-[10px]",
-                    streamFilter.type === "run" && streamFilter.label === `${wf.workflow_ref} → ${wf.current_phase}` ? "bg-primary/12" : ""
-                  )}
-                >
-                  <div className="flex items-center gap-1">
-                    <span className="w-[5px] h-[5px] rounded-full bg-primary animate-pulse" />
-                    <span className="font-semibold text-foreground">{wf.workflow_ref}</span>
-                  </div>
-                  <div className="text-muted-foreground/50 pl-[9px]">
-                    {wf.current_phase} ({wf.phase_progress})
-                    {wf.task_id !== "cron" && <span className="text-muted-foreground/30"> · {wf.task_id}</span>}
-                  </div>
-                </button>
-              ))}
-            </>
-          )}
         </div>
-
-        <div className="bg-card rounded-lg flex flex-col min-h-0 min-w-0 overflow-hidden border border-border">
-          <div className="flex gap-2 px-3 py-2.5 border-b border-border shrink-0 items-center">
-            <span className="text-[11px] text-muted-foreground font-semibold">
-              {streamFilter.type === "all"
-                ? "ALL"
-                : streamFilter.type === "run"
-                  ? streamFilter.label
-                  : streamFilter.type === "active-runs"
-                    ? streamFilter.label
-                    : streamFilter.value?.toUpperCase()}
-            </span>
-            <span className="text-[10px] text-muted-foreground/40">{filtered.length} events</span>
-            <span className={cn(
-              "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-              streamLoading ? "bg-primary/12 text-primary" : streamError ? "bg-chart-5/10 text-chart-5" : "bg-chart-1/10 text-chart-1"
-            )}>
-              {streamLoading ? "syncing" : streamError ? "stream error" : "live"}
-            </span>
-            <div className="flex-1" />
-            <label>
-              <span className="sr-only">Filter project events</span>
-              <input
-                placeholder="Filter..."
-                value={textFilter}
-                onChange={(e) => setTextFilter(e.target.value)}
-                aria-label="Filter project events"
-                className="w-40 rounded border border-border bg-background px-2 py-0.5 text-[11px] text-foreground outline-none focus:border-primary"
-              />
-            </label>
-            <label>
-              <span className="sr-only">Filter project events by level</span>
-              <select
-                value={levelFilter}
-                onChange={(e) => setLevelFilter(e.target.value)}
-                aria-label="Filter project events by level"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground outline-none"
-              >
-                <option value="all">All levels</option>
-                <option value="error">Error</option>
-                <option value="warn">Warn</option>
-                <option value="info">Info</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Group project events by</span>
-              <select
-                value={groupMode}
-                onChange={(e) => setGroupMode(e.target.value as LogGroupMode)}
-                aria-label="Group project events by"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground outline-none"
-              >
-                <option value="conversation">Conversation</option>
-                <option value="workflow">Workflow</option>
-                <option value="flat">Flat</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Choose project stream presentation</span>
-              <select
-                value={streamPresentation}
-                onChange={(e) => setStreamPresentation(e.target.value as "list" | "graph")}
-                aria-label="Choose project stream presentation"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground outline-none"
-              >
-                <option value="list">List</option>
-                <option value="graph">Graph</option>
-              </select>
-            </label>
-          </div>
-
-          {streamPresentation === "graph" ? (
-            <div className="flex-1 min-h-0 px-3 py-2">
-              {streamError && (
-                <div className="mb-2 rounded border border-chart-5/30 bg-chart-5/10 px-2 py-1 text-[10px] text-chart-5">
-                  {streamError}
-                </div>
-              )}
-              {filtered.length === 0 ? (
-                <div className="flex h-full min-h-[620px] items-center justify-center text-center text-muted-foreground/30">
-                  {streamLoading ? "Connecting to live stream..." : "No events matching filter"}
-                </div>
-              ) : (
-                <div className="h-[72vh] min-h-[680px]">
-                  <LogFlow events={filtered} groupMode={groupMode} />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div ref={logRef} onScroll={handleLogScroll} className="flex-1 overflow-auto px-3 py-1 font-mono text-[11px] leading-4">
-              {streamError && (
-                <div className="sticky top-0 z-10 mb-2 rounded border border-chart-5/30 bg-chart-5/10 px-2 py-1 text-[10px] text-chart-5">
-                  {streamError}
-                </div>
-              )}
-              {filtered.length === 0 ? (
-                <div className="text-muted-foreground/30 p-5 text-center">{streamLoading ? "Connecting to live stream..." : "No events matching filter"}</div>
-              ) : (
-                <LogEventList
-                  events={filtered}
-                  groupMode={groupMode}
-                  onWorkflowClick={(workflowRef) => setStreamFilter({ type: "workflow", value: workflowRef })}
-                />
-              )}
-              <div ref={bottomRef} />
-            </div>
-          )}
+        <div className="flex items-center gap-2">
+          <DetailTab label="Stream" active={viewMode === "stream"} onClick={() => setViewMode("stream")} />
+          <DetailTab label="Config" active={viewMode === "config"} onClick={() => setViewMode("config")} />
+          <DetailTab label="Tasks" active={viewMode === "tasks"} onClick={() => setViewMode("tasks")} count={taskList.length} />
+          <DetailTab label="Commits" active={viewMode === "commits"} onClick={() => setViewMode("commits")} />
         </div>
-      </div>
-      )}
+      </header>
+
+      <main className="flex-1 min-h-0 overflow-hidden">
+        {viewMode === "config" && config ? <ConfigView config={config} /> :
+         viewMode === "tasks" ? <TasksView tasks={taskList} /> :
+         viewMode === "commits" ? <CommitsView commits={commits} /> :
+         <div className="h-full flex">
+           <aside className="w-64 border-r border-white/5 bg-card/10 overflow-y-auto p-4 space-y-6">
+             <SidebarSection title="General">
+               <SidebarItem label="All Events" active={streamFilter.type === "all"} count={projectEvents.length} onClick={() => setStreamFilter({ type: "all" })} />
+             </SidebarSection>
+
+             {workflowRefs.size > 0 && (
+               <SidebarSection title="Workflows">
+                 {[...workflowRefs].map(([ref, { count, active }]) =>
+                   <SidebarItem key={ref} label={ref} active={streamFilter.type === "workflow" && streamFilter.value === ref} count={count} 
+                     tone={active ? "success" : "default"} onClick={() => setStreamFilter({ type: "workflow", value: ref })} />
+                 )}
+               </SidebarSection>
+             )}
+
+             {p.workflows.length > 0 && (
+               <SidebarSection title="Active Runs">
+                 {activeRunsFilter && <SidebarItem label="All Active" active={streamFilter.type === "active-runs"} count={p.workflows.length} 
+                   tone="success" onClick={() => setStreamFilter(activeRunsFilter)} />}
+                 {p.workflows.map((wf) => (
+                   <button key={wf.id} onClick={() => setStreamFilter({ type: "run", workflowId: wf.id, workflowRef: wf.workflow_ref, label: wf.workflow_ref })}
+                     className={cn("w-full text-left p-2 rounded-lg text-xs transition-colors", 
+                       streamFilter.type === "run" && streamFilter.workflowId === wf.id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-white/5")}>
+                     <div className="font-bold truncate">{wf.workflow_ref}</div>
+                     <div className="opacity-60 truncate">{wf.current_phase}</div>
+                   </button>
+                 ))}
+               </SidebarSection>
+             )}
+           </aside>
+
+           <section className="flex-1 flex flex-col min-w-0">
+             <div className="h-12 px-4 border-b border-white/5 flex items-center justify-between gap-4 bg-card/5 backdrop-blur-sm">
+               <div className="flex items-center gap-3">
+                 <span className="text-xs font-bold text-foreground/80 uppercase tracking-widest">
+                   {streamFilter.type === "all" ? "Live Stream" : streamFilter.label || (streamFilter.type === "workflow" ? streamFilter.value : "Stream")}
+                 </span>
+                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground">{filtered.length} events</span>
+               </div>
+               
+               <div className="flex items-center gap-2">
+                 <input value={textFilter} onChange={(e) => setTextFilter(e.target.value)} placeholder="Search logs..." 
+                   className="h-8 w-48 bg-white/5 border border-white/5 rounded-md px-3 text-xs outline-none focus:border-primary/50 transition-colors" />
+                 <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)}
+                   className="h-8 bg-white/5 border border-white/5 rounded-md px-2 text-xs outline-none">
+                   <option value="all">All Levels</option>
+                   <option value="error">Error</option>
+                   <option value="warn">Warn</option>
+                   <option value="info">Info</option>
+                 </select>
+                 <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as LogGroupMode)}
+                   className="h-8 bg-white/5 border border-white/5 rounded-md px-2 text-xs outline-none">
+                   <option value="conversation">Conversation</option>
+                   <option value="workflow">Workflow</option>
+                   <option value="flat">Flat</option>
+                 </select>
+               </div>
+             </div>
+
+             <div ref={logRef} onScroll={handleLogScroll} className="flex-1 overflow-y-auto custom-scrollbar p-4 font-mono">
+               {streamError && <div className="p-3 mb-4 rounded-lg bg-chart-5/10 border border-chart-5/20 text-xs text-chart-5">{streamError}</div>}
+               {filtered.length === 0 ? (
+                 <div className="h-full flex items-center justify-center text-muted-foreground/30 text-sm">
+                   {streamLoading ? "Establishing stream..." : "No events match your criteria"}
+                 </div>
+               ) : (
+                 <LogEventList events={filtered} groupMode={groupMode} onWorkflowClick={(ref) => setStreamFilter({ type: "workflow", value: ref })} />
+               )}
+               <div ref={bottomRef} />
+             </div>
+           </section>
+         </div>
+        }
+      </main>
     </div>
   );
 }
+
+function DetailTab({ label, active, onClick, count }: { label: string; active: boolean; onClick: () => void; count?: number }) {
+  return (
+    <button onClick={onClick} className={cn("px-4 py-2 text-sm font-medium transition-all relative", 
+      active ? "text-primary" : "text-muted-foreground hover:text-foreground")}>
+      <span className="flex items-center gap-2">
+        {label}
+        {count !== undefined && <span className="text-[10px] px-1.5 rounded-full bg-white/5 border border-white/5">{count}</span>}
+      </span>
+      {active && <div className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full" />}
+    </button>
+  );
+}
+
+function SidebarSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="px-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">{title}</h3>
+      <div className="space-y-0.5">{children}</div>
+    </div>
+  );
+}
+
+function SidebarItem({ label, active, count, tone, onClick }: { label: string; active: boolean; count: number; tone?: "success" | "default"; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className={cn("w-full flex items-center gap-3 px-2 py-1.5 rounded-lg text-sm transition-all", 
+      active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-white/5 hover:text-foreground")}>
+      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", 
+        active ? "bg-primary shadow-[0_0_8px_rgba(var(--la-primary),0.6)]" : tone === "success" ? "bg-chart-1" : "bg-white/20")} />
+      <span className="flex-1 truncate text-left font-medium">{label}</span>
+      <span className="text-[10px] font-bold opacity-40">{count}</span>
+    </button>
+  );
+}
+
 
 const PRIORITY_COLORS: Record<string, string> = { critical: "#b85c5c", high: "#c3893d", medium: "#8b93a3", low: "#6b7280" };
 const TASK_STATUS_COLORS: Record<string, string> = {
