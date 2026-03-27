@@ -8,10 +8,10 @@ import {
 import { cn } from "@/lib/utils";
 import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo, GlobalAoInfo } from "./types";
 import { LogEventList, type LogGroupMode } from "./LogEventList";
-import { LogFlow } from "./LogFlow";
 
 const STATUS_COLORS: Record<string, string> = {
   running: "#5d9a80",
+  paused: "#8c6b3d",
   stopped: "#5a6474",
   crashed: "#b85c5c",
   offline: "#465063",
@@ -42,10 +42,6 @@ function getEventRunId(event: StreamEvent) {
     : typeof event.meta?.run_id === "string"
       ? event.meta.run_id
       : null;
-}
-
-function getEventKey(event: StreamEvent, index: number) {
-  return `${event.project_root ?? event.project}:${event.ts}:${event.cat}:${event.workflow_id ?? ""}:${getEventRunId(event) ?? ""}:${event.task_id ?? ""}:${event.phase_id ?? ""}:${index}`;
 }
 
 function getEventIdentity(event: StreamEvent) {
@@ -128,7 +124,6 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
   const totalPool = projects.reduce((s, p) => s + (p.health?.pool_size || 0), 0);
   const totalQueue = projects.reduce((s, p) => s + (p.health?.queued_tasks || 0), 0);
   const totalTasks = projects.reduce((s, p) => s + (p.tasks?.total || 0), 0);
-  const totalDone = projects.reduce((s, p) => s + (p.tasks?.done || 0), 0);
 
   const statusData = Object.entries(
     projects.reduce<Record<string, number>>((acc, p) => {
@@ -297,7 +292,6 @@ function KPICard({ label, value, tone = "default" }: { label: string; value: str
 
 function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
   const configuredProviders = info.providers.filter((provider) => provider.configured);
-  const templates = info.workflow_templates.slice(0, 6);
 
   return (
     <div className="rounded-2xl border border-white/5 bg-card/20 p-6 space-y-6">
@@ -361,22 +355,10 @@ function MiniStat({ label, value, tone }: { label: string; value: string | numbe
   );
 }
 
-function shortUrl(value?: string) {
-  if (!value) return "Unknown";
-  try { return new URL(value).host; } catch { return value; }
-}
-
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatTimestamp(value?: number) {
-  if (!value) return "unknown";
-  return new Date(value).toLocaleString([], {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-  });
 }
 
 type ProjectStateTone = "failed" | "blocked" | "degraded" | "healthy" | "idle";
@@ -484,7 +466,6 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const [levelFilter, setLevelFilter] = useState("all");
   const [textFilter, setTextFilter] = useState("");
   const [groupMode, setGroupMode] = useState<LogGroupMode>("conversation");
-  const [streamPresentation, setStreamPresentation] = useState<"list" | "graph">("list");
   const [viewMode, setViewMode] = useState<"stream" | "config" | "tasks" | "commits">("stream");
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [taskList, setTaskList] = useState<TaskInfo[]>([]);
@@ -680,7 +661,11 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
              <div className="h-12 px-4 border-b border-white/5 flex items-center justify-between gap-4 bg-card/5 backdrop-blur-sm">
                <div className="flex items-center gap-3">
                  <span className="text-xs font-bold text-foreground/80 uppercase tracking-widest">
-                   {streamFilter.type === "all" ? "Live Stream" : streamFilter.label || (streamFilter.type === "workflow" ? streamFilter.value : "Stream")}
+                   {streamFilter.type === "all"
+                     ? "Live Stream"
+                     : streamFilter.type === "workflow"
+                       ? streamFilter.value
+                       : streamFilter.label}
                  </span>
                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground">{filtered.length} events</span>
                </div>

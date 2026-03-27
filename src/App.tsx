@@ -68,10 +68,10 @@ const TAB_META: Array<{
   {
     id: "cli",
     label: "Command Center",
-    compactLabel: "AO",
-    railLabel: "AO CLI",
-    eyebrow: "AO Surface",
-    description: "Navigate and run AO commands in project or global scope.",
+    compactLabel: "FL",
+    railLabel: "Fleet CLI",
+    eyebrow: "Fleet Surface",
+    description: "Navigate and run company-level fleet commands.",
   },
 ];
 
@@ -130,7 +130,7 @@ function App() {
         setProjects(p);
         projectsRef.current = p;
         setLoading(false);
-        p.forEach((proj) => {
+        p.filter((proj) => proj.enabled).forEach((proj) => {
           invoke("start_stream", { projectRoot: proj.root }).catch(console.error);
         });
       })
@@ -231,24 +231,13 @@ function App() {
   }));
 
   const totalAgents = health.reduce((sum, item) => sum + item.active_agents, 0);
-  const totalPool = health.reduce((sum, item) => sum + item.pool_size, 0);
   const totalQueue = health.reduce((sum, item) => sum + item.queued_tasks, 0);
   const totalTasks = Object.values(tasks).reduce((sum, item) => sum + item.total, 0);
-  const totalWorkflows = Object.values(workflows).reduce((sum, item) => sum + item.length, 0);
   const runningProjects = health.filter((item) => item.status === "running").length;
   const errors = events.filter((event) => event.level === "error").length;
-  const lastEvent = events.length > 0 ? events[events.length - 1] : null;
   const activeMeta = TAB_META.find((tab) => tab.id === activeTab) ?? TAB_META[0];
   const fleetStatusTone = errors > 0 ? "critical" : totalQueue > 20 ? "warning" : "success";
   const fleetStatusLabel = errors > 0 ? "Attention needed" : totalQueue > 20 ? "Queue pressure" : "Stable";
-  const syncLabel = globalAoInfo?.sync.configured
-    ? shortValue(globalAoInfo.sync.server ?? globalAoInfo.sync.project_id ?? "Connected")
-    : "Local only";
-  const primarySignal = errors > 0
-    ? `${formatCount(errors)} active errors surfacing.`
-    : totalQueue > 20
-      ? `${formatCount(totalQueue)} queued subjects building up.`
-      : `${formatCount(runningProjects)} projects online and stable.`;
 
   const tabMetrics: Record<AppTab, string> = {
     overview: formatCount(projects.length),
@@ -279,7 +268,7 @@ function App() {
     if (activeTab === "tasks") {
       return <TaskWorkbench projects={projects} />;
     }
-    return <CommandCenter projects={projects} />;
+    return <CommandCenter />;
   };
 
   return (
@@ -459,45 +448,6 @@ function SidebarNavItem({
   );
 }
 
-
-function RailContextList({
-  title,
-  items,
-}: {
-  title: string;
-  items: string[];
-}) {
-  return (
-    <div className="border-t border-white/8 pt-2">
-      <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">{title}</div>
-      <div className="mt-2 space-y-1.5">
-        {items.map((line) => (
-          <div key={line} className="text-[12px] leading-4 text-foreground/88">
-            {line}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function CollapsedRailStat({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "success" | "warning" | "critical";
-}) {
-  return (
-    <div className="border border-white/8 bg-black/12 px-2 py-2 text-center">
-      <div className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 text-[11px] font-semibold", toneTextClass(tone))}>{value}</div>
-    </div>
-  );
-}
-
 function toneTextClass(tone: "default" | "success" | "warning" | "critical") {
   if (tone === "success") return "text-chart-1";
   if (tone === "warning") return "text-chart-4";
@@ -514,17 +464,6 @@ function statusToneDotClass(tone: "default" | "success" | "warning" | "critical"
 
 function formatCount(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
-}
-
-function shortValue(value: string) {
-  if (value.length <= 18) return value;
-  return `${value.slice(0, 15)}…`;
-}
-
-function compactPath(value: string) {
-  const parts = value.split("/").filter(Boolean);
-  if (parts.length <= 3) return value;
-  return `/${parts.slice(-3).join("/")}`;
 }
 
 export default App;

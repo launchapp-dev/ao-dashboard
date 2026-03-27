@@ -13,6 +13,21 @@ use tokio::sync::Mutex as AsyncMutex;
 pub struct Project {
     pub name: String,
     pub root: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetProjectRecord {
+    pub slug: String,
+    pub ao_project_root: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetDaemonStatusRecord {
+    pub project_slug: String,
+    pub project_root: String,
+    pub observed_state: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -162,6 +177,75 @@ fn ao_binary() -> String {
 fn ao_home_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
     Ok(home.join(".ao"))
+}
+
+fn fleet_repo_dir() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("AO_FLEET_REPO") {
+        let repo = PathBuf::from(path);
+        if repo.exists() {
+            return Some(repo);
+        }
+    }
+
+    let current = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let sibling = current.parent().map(|parent| parent.join("ao-fleet"));
+    if let Some(repo) = sibling.filter(|repo| repo.exists()) {
+        return Some(repo);
+    }
+
+    let home = dirs::home_dir()?;
+    let repo = home.join("brain").join("repos").join("ao-fleet");
+    if repo.exists() {
+        return Some(repo);
+    }
+
+    None
+}
+
+fn fleet_db_path() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("AO_FLEET_DB_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+
+    if let Some(repo) = fleet_repo_dir() {
+        return Ok(repo.join("ao-fleet.db"));
+    }
+
+    Err("ao-fleet repo not found; set AO_FLEET_DB_PATH or AO_FLEET_REPO".to_string())
+}
+
+fn build_fleet_command(args: &[String]) -> Result<Command, String> {
+    let db_path = fleet_db_path()?;
+
+    if let Ok(path) = std::env::var("AO_FLEET_BINARY") {
+        let mut command = Command::new(path);
+        command.arg("--db-path").arg(&db_path).args(args);
+        return Ok(command);
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let local_bin = home.join(".local").join("bin").join("ao-fleet-cli");
+        if local_bin.exists() {
+            let mut command = Command::new(local_bin);
+            command.arg("--db-path").arg(&db_path).args(args);
+            return Ok(command);
+        }
+    }
+
+    if let Some(repo) = fleet_repo_dir() {
+        let mut command = Command::new("cargo");
+        command
+            .current_dir(repo)
+            .args(["run", "-q", "-p", "ao-fleet-cli", "--"])
+            .arg("--db-path")
+            .arg(&db_path)
+            .args(args);
+        return Ok(command);
+    }
+
+    let mut command = Command::new("ao-fleet-cli");
+    command.arg("--db-path").arg(&db_path).args(args);
+    Ok(command)
 }
 
 fn read_json_value(path: &Path) -> Option<serde_json::Value> {
@@ -329,55 +413,46 @@ fn summarize_log_file(path: &Path, name: &str) -> AoLogInfo {
     }
 }
 
+async fn load_fleet_projects() -> Result<Vec<FleetProjectRecord>, String> {
+    let data = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let mut projects: Vec<FleetProjectRecord> =
+        serde_json::from_value(data).map_err(|error| error.to_string())?;
+    projects.sort_by(|left, right| left.slug.cmp(&right.slug));
+    Ok(projects)
+}
+
+fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
+    let fleet_status = if status.observed_state.trim().is_empty() {
+        "offline".to_string()
+    } else {
+        status.observed_state.clone()
+    };
+
+    DaemonHealth {
+        project: status.project_slug.clone(),
+        root: status.project_root.clone(),
+        status: fleet_status.clone(),
+        active_agents: 0,
+        pool_size: 0,
+        queued_tasks: 0,
+        daemon_pid: None,
+        pool_utilization_percent: 0.0,
+        healthy: fleet_status == "running",
+    }
+}
+
 #[tauri::command]
 async fn discover_projects() -> Result<Vec<Project>, String> {
-    let ao_dir = ao_home_dir()?;
-    let mut projects = Vec::new();
-    let mut seen_roots = std::collections::HashSet::new();
+    let projects = load_fleet_projects().await?;
 
-    if let Ok(entries) = std::fs::read_dir(&ao_dir) {
-        for entry in entries.flatten() {
-            let dir_name = entry.file_name().to_string_lossy().to_string();
-            if dir_name.starts_with("tmp")
-                || dir_name.starts_with("ao-subject")
-                || dir_name.starts_with("agent-")
-                || dir_name.starts_with("ao-test-")
-                || dir_name.ends_with(".db")
-            {
-                continue;
-            }
-
-            let dir = entry.path();
-            if !dir.is_dir() {
-                continue;
-            }
-
-            let root = if let Ok(target) = std::fs::read_link(dir.join("project-root")) {
-                target.to_string_lossy().to_string()
-            } else if let Ok(content) = std::fs::read_to_string(dir.join(".project-root")) {
-                content.trim().to_string()
-            } else {
-                continue;
-            };
-
-            if !PathBuf::from(&root).exists() || !seen_roots.insert(root.clone()) {
-                continue;
-            }
-
-            let display_name = PathBuf::from(&root)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| dir_name.clone());
-
-            projects.push(Project {
-                name: display_name,
-                root,
-            });
-        }
-    }
-
-    projects.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(projects)
+    Ok(projects
+        .into_iter()
+        .map(|project| Project {
+            name: project.slug,
+            root: project.ao_project_root,
+            enabled: project.enabled,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -450,26 +525,53 @@ async fn get_global_ao_info() -> Result<GlobalAoInfo, String> {
     })
 }
 
-async fn run_ao_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> {
-    let mut command = Command::new(ao_binary());
+async fn run_fleet_cmd(args: &[String], timeout_secs: u64) -> Result<String, String> {
+    let mut command = build_fleet_command(args)?;
     command
-        .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
 
     let child = command.spawn().map_err(|e| e.to_string())?;
-
-    match tokio::time::timeout(
+    let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         child.wait_with_output(),
     )
     .await
-    {
-        Ok(Ok(output)) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err("timeout".to_string()),
+    .map_err(|_| "timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else if !stderr.is_empty() {
+        Err(stderr)
+    } else {
+        Err(stdout.trim().to_string())
     }
+}
+
+async fn run_fleet_cmd_str(args: &[&str], timeout_secs: u64) -> Result<String, String> {
+    let args = args
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    run_fleet_cmd(&args, timeout_secs).await
+}
+
+async fn run_fleet_json_cmd_str(
+    args: &[&str],
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let stdout = run_fleet_cmd_str(args, timeout_secs).await?;
+    serde_json::from_str(&stdout).map_err(|error| {
+        format!(
+            "failed to parse fleet json output: {error}: {}",
+            stdout.lines().next().unwrap_or("")
+        )
+    })
 }
 
 fn extract_ao_error(envelope: &serde_json::Value, stdout: &str) -> String {
@@ -591,20 +693,8 @@ fn parse_help_output(path: Vec<String>, stdout: &str) -> AoCommandHelp {
     }
 }
 
-fn build_ao_args(
-    path: &[String],
-    project_root: Option<&str>,
-    json: bool,
-    extra_args: &[String],
-) -> Vec<String> {
+fn build_fleet_args(path: &[String], extra_args: &[String]) -> Vec<String> {
     let mut args = Vec::new();
-    if json {
-        args.push("--json".to_string());
-    }
-    if let Some(root) = project_root.filter(|value| !value.trim().is_empty()) {
-        args.push("--project-root".to_string());
-        args.push(root.to_string());
-    }
     args.extend(path.iter().cloned());
     args.extend(extra_args.iter().cloned());
     args
@@ -647,7 +737,7 @@ async fn get_ao_help(
 
     let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
     args.push("--help");
-    let stdout = run_ao_cmd(&args, 10).await?;
+    let stdout = run_fleet_cmd_str(&args, 10).await?;
     let help = parse_help_output(path, &stdout);
 
     cache
@@ -664,9 +754,9 @@ async fn start_ao_session(
     app: tauri::AppHandle,
     store: tauri::State<'_, Arc<AoSessionStore>>,
     path: Vec<String>,
-    project_root: Option<String>,
+    _project_root: Option<String>,
     extra_args: Option<String>,
-    json: bool,
+    _json: bool,
 ) -> Result<AoSessionStarted, String> {
     if path.is_empty() {
         return Err("command path is required".to_string());
@@ -677,10 +767,10 @@ async fn start_ao_session(
         .map(|raw| shlex::split(raw).ok_or_else(|| "failed to parse extra args".to_string()))
         .transpose()?
         .unwrap_or_default();
-    let args = build_ao_args(&path, project_root.as_deref(), json, &parsed_extra);
+    let args = build_fleet_args(&path, &parsed_extra);
 
-    let mut child = Command::new(ao_binary())
-        .args(&args)
+    let mut command = build_fleet_command(&args)?;
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -749,7 +839,11 @@ async fn start_ao_session(
 
     Ok(AoSessionStarted {
         session_id,
-        display_command: format!("ao {}", args.join(" ")),
+        display_command: format!(
+            "ao-fleet-cli --db-path {} {}",
+            fleet_db_path()?.display(),
+            args.join(" ")
+        ),
     })
 }
 
@@ -1134,44 +1228,31 @@ async fn get_task_summary(project_root: String) -> Result<TaskSummary, String> {
 
 #[tauri::command]
 async fn get_fleet_data() -> Result<serde_json::Value, String> {
-    let projects = discover_projects().await?;
-    let mut handles = Vec::new();
+    let projects = load_fleet_projects().await?;
+    let statuses_value = run_fleet_json_cmd_str(&["daemon-status", "--refresh"], 30).await?;
+    let statuses: Vec<FleetDaemonStatusRecord> =
+        serde_json::from_value(statuses_value).map_err(|error| error.to_string())?;
+    let status_by_root = statuses
+        .into_iter()
+        .map(|status| (status.project_root.clone(), status))
+        .collect::<HashMap<_, _>>();
 
-    for project in projects {
-        let name = project.name.clone();
-        let root = project.root.clone();
-        handles.push(tokio::spawn(async move {
-            let r1 = root.clone();
-            let r2 = root.clone();
-            let r3 = root.clone();
-
-            let (health, workflows, tasks) = tokio::join!(
-                async {
-                    run_ao_json_cmd_str(&["daemon", "health", "--json", "--project-root", &r1], 5)
-                        .await
-                        .map(|data| parse_health_value(&r1, &data))
-                        .ok()
-                },
-                async { get_workflows(r2).await.unwrap_or_default() },
-                async { get_task_summary(r3).await.ok() },
-            );
+    let fleet = projects
+        .into_iter()
+        .map(|project| {
+            let health = status_by_root
+                .get(&project.ao_project_root)
+                .map(parse_fleet_health_value);
 
             serde_json::json!({
-                "name": name,
-                "root": root,
+                "name": project.slug,
+                "root": project.ao_project_root,
                 "health": health,
-                "workflows": workflows,
-                "tasks": tasks,
+                "workflows": [],
+                "tasks": serde_json::Value::Null,
             })
-        }));
-    }
-
-    let mut fleet = Vec::new();
-    for handle in handles {
-        if let Ok(val) = handle.await {
-            fleet.push(val);
-        }
-    }
+        })
+        .collect::<Vec<_>>();
 
     Ok(serde_json::json!({ "projects": fleet }))
 }

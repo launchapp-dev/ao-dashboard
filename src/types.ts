@@ -1,6 +1,7 @@
 export interface Project {
   name: string;
   root: string;
+  enabled: boolean;
 }
 
 export interface DaemonHealth {

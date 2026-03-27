@@ -7,16 +7,10 @@ import type {
   AoSessionExit,
   AoSessionOutput,
   AoSessionStarted,
-  Project,
 } from "./types";
 
-const GLOBAL_SCOPE = "__global__";
 const MAX_SESSION_LINES = 1000;
 const OUTPUT_FLUSH_MS = 75;
-
-interface Props {
-  projects: Project[];
-}
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -117,13 +111,11 @@ function OutputEntry({ stream, line }: { stream: string; line: string }) {
   );
 }
 
-export function CommandCenter({ projects }: Props) {
+export function CommandCenter() {
   const [path, setPath] = useState<string[]>([]);
   const [help, setHelp] = useState<AoCommandHelp | null>(null);
   const [loadingHelp, setLoadingHelp] = useState(true);
   const [extraArgs, setExtraArgs] = useState("");
-  const [jsonMode, setJsonMode] = useState(true);
-  const [selectedProjectRoot, setSelectedProjectRoot] = useState<string>(GLOBAL_SCOPE);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCommand, setSessionCommand] = useState("");
   const [sessionRunning, setSessionRunning] = useState(false);
@@ -224,7 +216,7 @@ export function CommandCenter({ projects }: Props) {
 
   const handleRun = async () => {
     if (path.length === 0) {
-      setError("Select an AO command first.");
+      setError("Select a fleet command first.");
       return;
     }
 
@@ -241,9 +233,7 @@ export function CommandCenter({ projects }: Props) {
     try {
       const started = await invoke<AoSessionStarted>("start_ao_session", {
         path,
-        projectRoot: selectedProjectRoot === GLOBAL_SCOPE ? null : selectedProjectRoot,
         extraArgs: extraArgs.trim() ? extraArgs : null,
-        json: jsonMode,
       });
       setSessionId(started.session_id);
       setSessionCommand(started.display_command);
@@ -279,8 +269,8 @@ export function CommandCenter({ projects }: Props) {
     <div className="grid h-full min-h-0 gap-3 p-3 sm:p-4 xl:grid-cols-[340px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/40">
         <div className="border-b border-border px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">AO Command Center</div>
-          <div className="mt-1 text-sm text-foreground">{help?.about || "Browse the installed AO CLI surface."}</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Fleet Command Center</div>
+          <div className="mt-1 text-sm text-foreground">{help?.about || "Browse the installed ao-fleet-cli surface."}</div>
           <div className="mt-2 flex flex-wrap gap-1">
             <button
               className={cn(
@@ -289,7 +279,7 @@ export function CommandCenter({ projects }: Props) {
               )}
               onClick={() => openPath([])}
             >
-              ao
+              ao-fleet-cli
             </button>
             {path.map((segment, index) => (
               <button
@@ -335,36 +325,17 @@ export function CommandCenter({ projects }: Props) {
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/35">
         <div className="border-b border-border bg-card/70 px-4 py-3">
-          <div className="grid gap-2 2xl:grid-cols-[200px_1fr_auto_auto]">
-            <select
-              value={selectedProjectRoot}
-              onChange={(event) => setSelectedProjectRoot(event.target.value)}
-              aria-label="Select AO command scope"
-              className="rounded border border-border bg-background px-3 py-2 text-sm outline-none"
-            >
-              <option value={GLOBAL_SCOPE}>Global scope</option>
-              {projects.map((project) => (
-                <option key={project.root} value={project.root}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+          <div className="grid gap-2 2xl:grid-cols-[220px_1fr_auto]">
+            <div className="rounded border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
+              Fleet-wide scope
+            </div>
             <input
               value={extraArgs}
               onChange={(event) => setExtraArgs(event.target.value)}
-              placeholder='Extra args, for example: list --status ready or get TASK-001'
-              aria-label="Extra AO command arguments"
+              placeholder='Extra args, for example: team-list or daemon-status --refresh'
+              aria-label="Extra fleet command arguments"
               className="rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             />
-            <label className="flex items-center gap-2 rounded border border-border px-3 py-2 text-sm text-muted-foreground">
-              <input
-                checked={jsonMode}
-                onChange={(event) => setJsonMode(event.target.checked)}
-                type="checkbox"
-                aria-label="Run command in JSON mode"
-              />
-              JSON
-            </label>
             <button
               className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
               disabled={sessionRunning || path.length === 0}
@@ -376,7 +347,7 @@ export function CommandCenter({ projects }: Props) {
 
           <div className="mt-2 flex items-center gap-2">
             <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-              {sessionCommand || (path.length ? `ao ${path.join(" ")}` : "Select a command from the left.")}
+              {sessionCommand || (path.length ? `ao-fleet-cli ${path.join(" ")}` : "Select a command from the left.")}
             </div>
             {sessionId && (
               <div
@@ -406,7 +377,7 @@ export function CommandCenter({ projects }: Props) {
           <div className="flex-1 overflow-auto bg-background px-4 py-3 font-mono text-[12px] leading-5">
             {outputLines.length === 0 ? (
               <div className="text-muted-foreground">
-                Command output will stream here. Long-running AO commands stay attached until you stop them or they exit.
+                Command output will stream here. Long-running fleet commands stay attached until you stop them or they exit.
               </div>
             ) : (
               outputLines.map((entry, index) => (

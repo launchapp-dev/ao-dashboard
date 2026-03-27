@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import type { Project, TaskChecklistItem, TaskCreatePayload, TaskInfo, TaskRecord, TaskStats } from "./types";
@@ -108,16 +108,16 @@ interface Props {
 
 export function TaskWorkbench({ projects }: Props) {
   const [selectedProjectRoot, setSelectedProjectRoot] = useState(projects[0]?.root ?? "");
-  const [prioritized, setPrioritized] = useState(false);
+  const [prioritized] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [statsLoading, setStatsLoading] = useState(false);
-  const [nextTaskLoading, setNextTaskLoading] = useState(false);
+  const [, setStatsLoading] = useState(false);
+  const [, setNextTaskLoading] = useState(false);
   const [tasks, setTasks] = useState<TaskInfo[]>([]);
-  const [stats, setStats] = useState<TaskStats | null>(null);
-  const [nextTask, setNextTask] = useState<TaskRecord | null>(null);
+  const [, setStats] = useState<TaskStats | null>(null);
+  const [, setNextTask] = useState<TaskRecord | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskRecord | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [, setDetailLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -125,7 +125,7 @@ export function TaskWorkbench({ projects }: Props) {
   const [page, setPage] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [, setFeedback] = useState<string | null>(null);
 
   const [createForm, setCreateForm] = useState<TaskCreatePayload>({
     title: "",
@@ -664,9 +664,6 @@ export function TaskWorkbench({ projects }: Props) {
     });
   };
 
-  const selectedProject = projects.find((project) => project.root === selectedProjectRoot) ?? null;
-  const statusCounts = stats?.by_status ?? {};
-
   return (
     <div className="h-full flex gap-4 p-6 overflow-hidden bg-background/50">
       {/* Sidebar Task List */}
@@ -771,21 +768,21 @@ export function TaskWorkbench({ projects }: Props) {
 
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Description</label>
-                <textarea value={createForm.description} onChange={(e) => setCreateForm(c => ({...c, description: e.target.value}))}
+                <textarea value={createForm.description ?? ""} onChange={(e) => setCreateForm(c => ({...c, description: e.target.value}))}
                   placeholder="Context, acceptance criteria, and technical details..." rows={8} className="w-full bg-white/5 border border-white/10 rounded-xl p-4 text-base outline-none focus:border-primary/50 resize-none transition-colors" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Task Type</label>
-                  <select value={createForm.task_type} onChange={(e) => setCreateForm(c => ({...c, task_type: e.target.value}))}
+                  <select value={createForm.task_type ?? "feature"} onChange={(e) => setCreateForm(c => ({...c, task_type: e.target.value}))}
                     className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 text-sm font-bold outline-none uppercase tracking-wider">
                     {TASK_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60 px-1">Priority Level</label>
-                  <select value={createForm.priority} onChange={(e) => setCreateForm(c => ({...c, priority: e.target.value}))}
+                  <select value={createForm.priority ?? "medium"} onChange={(e) => setCreateForm(c => ({...c, priority: e.target.value}))}
                     className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 text-sm font-bold outline-none uppercase tracking-wider">
                     {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
