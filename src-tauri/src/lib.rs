@@ -143,50 +143,6 @@ struct StreamRegistry {
 const STREAM_TAIL_LINES: &str = "250";
 const FILTERED_STREAM_TAIL_LINES: &str = "400";
 
-fn build_filtered_stream_args(
-    project_root: &str,
-    workflow: Option<&str>,
-    run: Option<&str>,
-    cat: Option<&str>,
-    level: Option<&str>,
-    tail_lines: &str,
-    follow: bool,
-) -> Vec<String> {
-    let mut args = vec![
-        "daemon".to_string(),
-        "stream".to_string(),
-        "--project-root".to_string(),
-        project_root.to_string(),
-        "--json".to_string(),
-        "--tail".to_string(),
-        tail_lines.to_string(),
-    ];
-
-    if let Some(value) = workflow.filter(|value| !value.is_empty()) {
-        args.push("--workflow".to_string());
-        args.push(value.to_string());
-    } else if let Some(value) = run.filter(|value| !value.is_empty()) {
-        args.push("--run".to_string());
-        args.push(value.to_string());
-    }
-
-    if let Some(value) = cat.filter(|value| !value.is_empty()) {
-        args.push("--cat".to_string());
-        args.push(value.to_string());
-    }
-
-    if let Some(value) = level.filter(|value| !value.is_empty() && *value != "all") {
-        args.push("--level".to_string());
-        args.push(value.to_string());
-    }
-
-    if !follow {
-        args.push("--no-follow".to_string());
-    }
-
-    args
-}
-
 fn ao_binary() -> String {
     let home = dirs::home_dir().unwrap_or_default();
     let local_bin = home.join(".local/bin/ao");
@@ -629,6 +585,74 @@ async fn run_fleet_json_cmd_str(
     })
 }
 
+async fn run_fleet_project_json_cmd(
+    project_root: &str,
+    command_args: &[String],
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "project-ao-json".to_string(),
+        "--project-root".to_string(),
+        project_root.to_string(),
+        "--".to_string(),
+    ];
+    args.extend(command_args.iter().cloned());
+    let stdout = run_fleet_cmd(&args, timeout_secs).await?;
+    serde_json::from_str(&stdout).map_err(|error| {
+        format!(
+            "failed to parse fleet project json output: {error}: {}",
+            stdout.lines().next().unwrap_or("")
+        )
+    })
+}
+
+async fn run_fleet_project_config_cmd(project_root: &str) -> Result<serde_json::Value, String> {
+    run_fleet_json_cmd_str(&["project-config-get", "--project-root", project_root], 15).await
+}
+
+async fn run_fleet_project_events_cmd(
+    project_root: &str,
+    workflow: Option<&str>,
+    run: Option<&str>,
+    cat: Option<&str>,
+    level: Option<&str>,
+    tail: &str,
+) -> Result<Vec<StreamEvent>, String> {
+    let mut args = vec![
+        "project-events".to_string(),
+        "--project-root".to_string(),
+        project_root.to_string(),
+        "--tail".to_string(),
+        tail.to_string(),
+    ];
+
+    if let Some(value) = workflow.filter(|value| !value.is_empty()) {
+        args.push("--workflow".to_string());
+        args.push(value.to_string());
+    } else if let Some(value) = run.filter(|value| !value.is_empty()) {
+        args.push("--run".to_string());
+        args.push(value.to_string());
+    }
+
+    if let Some(value) = cat.filter(|value| !value.is_empty()) {
+        args.push("--cat".to_string());
+        args.push(value.to_string());
+    }
+
+    if let Some(value) = level.filter(|value| !value.is_empty() && *value != "all") {
+        args.push("--level".to_string());
+        args.push(value.to_string());
+    }
+
+    let stdout = run_fleet_cmd(&args, 15).await?;
+    serde_json::from_str(&stdout).map_err(|error| {
+        format!(
+            "failed to parse fleet project events output: {error}: {}",
+            stdout.lines().next().unwrap_or("")
+        )
+    })
+}
+
 fn extract_ao_error(envelope: &serde_json::Value, stdout: &str) -> String {
     envelope["error"]["message"]
         .as_str()
@@ -1030,10 +1054,7 @@ async fn start_stream(
     streams: tauri::State<'_, StreamRegistry>,
     project_root: String,
 ) -> Result<(), String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let project_name = project_name_from_root(&project_root);
     let stream_key = project_root.clone();
     let active_projects = streams.active_projects.clone();
 
@@ -1044,19 +1065,25 @@ async fn start_stream(
         }
     }
 
-    let ao = ao_binary();
     tokio::spawn(async move {
-        let mut command = Command::new(&ao);
+        let args = vec![
+            "project-events".to_string(),
+            "--project-root".to_string(),
+            project_root.clone(),
+            "--tail".to_string(),
+            STREAM_TAIL_LINES.to_string(),
+            "--follow".to_string(),
+        ];
+        let mut command = match build_fleet_command(&args) {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("stream setup error for {project_name}: {error}");
+                let mut active = active_projects.lock().await;
+                active.remove(&stream_key);
+                return;
+            }
+        };
         command
-            .args([
-                "daemon",
-                "stream",
-                "--project-root",
-                &project_root,
-                "--json",
-                "--tail",
-                STREAM_TAIL_LINES,
-            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
@@ -1076,8 +1103,7 @@ async fn start_stream(
             let mut lines = reader.lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                    let event = parse_stream_event(&project_name, &project_root, &val);
+                if let Ok(event) = serde_json::from_str::<StreamEvent>(&line) {
                     let _ = app.emit("stream-event", &event);
                 }
             }
@@ -1092,40 +1118,7 @@ async fn start_stream(
 
 #[tauri::command]
 async fn get_recent_events(project_root: String) -> Result<Vec<StreamEvent>, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let output = Command::new(ao_binary())
-        .args(
-            build_filtered_stream_args(
-                &project_root,
-                None,
-                None,
-                None,
-                None,
-                STREAM_TAIL_LINES,
-                false,
-            )
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        )
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut events = Vec::new();
-
-    for line in stdout.lines() {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            events.push(parse_stream_event(&project_name, &project_root, &val));
-        }
-    }
-
-    Ok(events)
+    run_fleet_project_events_cmd(&project_root, None, None, None, None, STREAM_TAIL_LINES).await
 }
 
 #[tauri::command]
@@ -1136,37 +1129,15 @@ async fn get_filtered_events(
     cat: Option<String>,
     level: Option<String>,
 ) -> Result<Vec<StreamEvent>, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let args = build_filtered_stream_args(
+    run_fleet_project_events_cmd(
         &project_root,
         workflow.as_deref(),
         run.as_deref(),
         cat.as_deref(),
         level.as_deref(),
         FILTERED_STREAM_TAIL_LINES,
-        false,
-    );
-
-    let output = Command::new(ao_binary())
-        .args(args.iter().map(String::as_str).collect::<Vec<_>>())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut events = Vec::new();
-
-    for line in stdout.lines() {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            events.push(parse_stream_event(&project_name, &project_root, &val));
-        }
-    }
-
-    Ok(events)
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1196,14 +1167,9 @@ pub struct TaskSummary {
 #[tauri::command]
 async fn get_workflows(project_root: String) -> Result<Vec<WorkflowInfo>, String> {
     let project_name = project_name_from_root(&project_root);
-    let data = run_ao_json_cmd_str(
-        &[
-            "workflow",
-            "list",
-            "--json",
-            "--project-root",
-            &project_root,
-        ],
+    let data = run_fleet_project_json_cmd(
+        &project_root,
+        &["workflow".to_string(), "list".to_string()],
         5,
     )
     .await?;
@@ -1238,11 +1204,9 @@ async fn get_workflows(project_root: String) -> Result<Vec<WorkflowInfo>, String
 #[tauri::command]
 async fn get_task_summary(project_root: String) -> Result<TaskSummary, String> {
     let project_name = project_name_from_root(&project_root);
-    let data = run_ao_json_cmd_str(
-        &["task", "stats", "--json", "--project-root", &project_root],
-        5,
-    )
-    .await?;
+    let data =
+        run_fleet_project_json_cmd(&project_root, &["task".to_string(), "stats".to_string()], 5)
+            .await?;
     let by_status = data["by_status"].as_object().cloned().unwrap_or_default();
 
     Ok(TaskSummary {
@@ -1316,66 +1280,6 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "projects": fleet }))
 }
 
-fn parse_stream_event(
-    project_name: &str,
-    project_root: &str,
-    val: &serde_json::Value,
-) -> StreamEvent {
-    let run_id = val["run_id"].as_str().map(String::from);
-    let workflow_id = run_id.as_deref().and_then(parse_workflow_id_from_run_id);
-    let wf_ref = val["meta"]["workflow_ref"]
-        .as_str()
-        .or(val["workflow_ref"].as_str())
-        .map(String::from);
-    let tool = val["meta"]["tool"]
-        .as_str()
-        .or(val["tool"].as_str())
-        .map(String::from);
-    StreamEvent {
-        project: project_name.to_string(),
-        project_root: project_root.to_string(),
-        ts: val["ts"].as_str().unwrap_or("").to_string(),
-        level: val["level"].as_str().unwrap_or("info").to_string(),
-        cat: val["cat"].as_str().unwrap_or("").to_string(),
-        msg: val["msg"].as_str().unwrap_or("").to_string(),
-        role: val["role"].as_str().map(String::from),
-        content: val["content"].as_str().map(String::from),
-        error: val["error"].as_str().map(String::from),
-        run_id,
-        workflow_id,
-        subject_id: val["subject_id"].as_str().map(String::from),
-        phase_id: val["phase_id"].as_str().map(String::from),
-        task_id: val["task_id"].as_str().map(String::from),
-        workflow_ref: wf_ref,
-        model: val["model"].as_str().map(String::from),
-        tool,
-        schedule_id: val["schedule_id"].as_str().map(String::from),
-        meta: val.get("meta").cloned(),
-    }
-}
-
-fn parse_workflow_id_from_run_id(run_id: &str) -> Option<String> {
-    let trimmed = run_id.strip_prefix("wf-")?;
-    if trimmed.len() < 36 {
-        return None;
-    }
-
-    let candidate = &trimmed[..36];
-    let is_uuid = candidate
-        .bytes()
-        .enumerate()
-        .all(|(index, byte)| match index {
-            8 | 13 | 18 | 23 => byte == b'-',
-            _ => byte.is_ascii_hexdigit(),
-        });
-
-    if is_uuid {
-        Some(candidate.to_string())
-    } else {
-        None
-    }
-}
-
 #[tauri::command]
 async fn start_filtered_stream(
     app: tauri::AppHandle,
@@ -1386,30 +1290,46 @@ async fn start_filtered_stream(
     cat: Option<String>,
     level: Option<String>,
 ) -> Result<String, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let stream_project_root = project_root.clone();
     let stream_id = streams.next_filtered_id.fetch_add(1, Ordering::Relaxed);
+    let project_name = project_name_from_root(&project_root);
     let channel_id = format!("filtered-stream:{project_name}:{stream_id}");
-    let args = build_filtered_stream_args(
-        &project_root,
-        workflow.as_deref(),
-        run.as_deref(),
-        cat.as_deref(),
-        level.as_deref(),
-        FILTERED_STREAM_TAIL_LINES,
-        true,
-    );
-
-    let ao = ao_binary();
+    let mut args = vec![
+        "project-events".to_string(),
+        "--project-root".to_string(),
+        project_root.clone(),
+        "--tail".to_string(),
+        FILTERED_STREAM_TAIL_LINES.to_string(),
+        "--follow".to_string(),
+    ];
+    if let Some(value) = workflow.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--workflow".to_string());
+        args.push(value.to_string());
+    } else if let Some(value) = run.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--run".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = cat.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--cat".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = level
+        .as_deref()
+        .filter(|value| !value.is_empty() && *value != "all")
+    {
+        args.push("--level".to_string());
+        args.push(value.to_string());
+    }
     let ch = channel_id.clone();
     let filtered_streams = streams.filtered_streams.clone();
     tokio::spawn(async move {
-        let mut command = Command::new(&ao);
+        let mut command = match build_fleet_command(&args) {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("filtered stream setup error for {project_name}: {error}");
+                return;
+            }
+        };
         command
-            .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
@@ -1441,8 +1361,7 @@ async fn start_filtered_stream(
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                    let event = parse_stream_event(&project_name, &stream_project_root, &val);
+                if let Ok(event) = serde_json::from_str::<StreamEvent>(&line) {
                     let _ = app.emit(&ch, &event);
                 }
             }
@@ -1528,175 +1447,8 @@ pub struct ProjectConfig {
 
 #[tauri::command]
 async fn get_project_config(project_root: String) -> Result<ProjectConfig, String> {
-    let project_name = PathBuf::from(&project_root)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let wf_dir = PathBuf::from(&project_root).join(".ao").join("workflows");
-    let mut merged: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-
-    if let Ok(entries) = std::fs::read_dir(&wf_dir) {
-        let mut files: Vec<_> = entries.flatten().collect();
-        files.sort_by_key(|e| e.file_name());
-        for entry in files {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(val) = serde_yaml::from_str::<serde_json::Value>(&content) {
-                    if let Some(obj) = val.as_object() {
-                        for (k, v) in obj {
-                            match (merged.get(k), v) {
-                                (
-                                    Some(serde_json::Value::Object(existing)),
-                                    serde_json::Value::Object(new_obj),
-                                ) => {
-                                    let mut m = existing.clone();
-                                    for (mk, mv) in new_obj {
-                                        m.insert(mk.clone(), mv.clone());
-                                    }
-                                    merged.insert(k.clone(), serde_json::Value::Object(m));
-                                }
-                                (
-                                    Some(serde_json::Value::Array(existing)),
-                                    serde_json::Value::Array(new_arr),
-                                ) => {
-                                    let mut m = existing.clone();
-                                    m.extend(new_arr.iter().cloned());
-                                    merged.insert(k.clone(), serde_json::Value::Array(m));
-                                }
-                                _ => {
-                                    merged.insert(k.clone(), v.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let agents = if let Some(serde_json::Value::Object(agents_map)) = merged.get("agents") {
-        agents_map
-            .iter()
-            .map(|(name, val)| {
-                let mcp = val["mcp_servers"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                AgentConfig {
-                    name: name.clone(),
-                    model: val["model"].as_str().unwrap_or("default").to_string(),
-                    tool: val["tool"].as_str().unwrap_or("claude").to_string(),
-                    system_prompt: val["system_prompt"].as_str().map(String::from),
-                    mcp_servers: mcp,
-                }
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    let phases = if let Some(serde_json::Value::Object(phases_map)) = merged.get("phases") {
-        phases_map
-            .iter()
-            .map(|(id, val)| {
-                let cmd_prog = val["command"]["program"].as_str().map(String::from);
-                let cmd_args = val["command"]["args"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let timeout = val["command"]["timeout_secs"]
-                    .as_i64()
-                    .or(val["timeout_secs"].as_i64());
-                PhaseConfig {
-                    id: id.clone(),
-                    mode: val["mode"].as_str().unwrap_or("agent").to_string(),
-                    agent: val["agent"].as_str().map(String::from),
-                    directive: val["directive"].as_str().map(String::from),
-                    command: cmd_prog,
-                    command_args: cmd_args,
-                    timeout_secs: timeout,
-                    cwd_mode: val["command"]["cwd_mode"].as_str().map(String::from),
-                }
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    let mut seen_wf = std::collections::HashSet::new();
-    let workflows = if let Some(serde_json::Value::Array(wf_arr)) = merged.get("workflows") {
-        wf_arr
-            .iter()
-            .filter_map(|w| {
-                let id = w["id"].as_str()?.to_string();
-                if !seen_wf.insert(id.clone()) {
-                    return None;
-                }
-                let phase_list = w["phases"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|p| {
-                                p.as_str()
-                                    .map(String::from)
-                                    .or_else(|| p["phase_ref"].as_str().map(String::from))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(WorkflowConfig {
-                    id,
-                    name: w["name"].as_str().map(String::from),
-                    description: w["description"].as_str().map(String::from),
-                    phases: phase_list,
-                })
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    let mut seen_sched = std::collections::HashSet::new();
-    let schedules = if let Some(serde_json::Value::Array(sched_arr)) = merged.get("schedules") {
-        sched_arr
-            .iter()
-            .filter_map(|s| {
-                let id = s["id"].as_str()?.to_string();
-                if !seen_sched.insert(id.clone()) {
-                    return None;
-                }
-                Some(ScheduleConfig {
-                    id,
-                    cron: s["cron"].as_str().unwrap_or("").to_string(),
-                    workflow_ref: s["workflow_ref"].as_str().unwrap_or("").to_string(),
-                    enabled: s["enabled"].as_bool().unwrap_or(true),
-                })
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    Ok(ProjectConfig {
-        project: project_name,
-        root: project_root,
-        agents,
-        phases,
-        workflows,
-        schedules,
-    })
+    serde_json::from_value(run_fleet_project_config_cmd(&project_root).await?)
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1740,13 +1492,7 @@ async fn get_task_list(
     } else {
         "list"
     };
-    let mut args = vec![
-        "task".to_string(),
-        subcommand.to_string(),
-        "--json".to_string(),
-        "--project-root".to_string(),
-        project_root,
-    ];
+    let mut args = vec!["task".to_string(), subcommand.to_string()];
     if let Some(value) = status.filter(|value| !value.trim().is_empty()) {
         args.push("--status".to_string());
         args.push(value);
@@ -1767,7 +1513,7 @@ async fn get_task_list(
         args.push("--offset".to_string());
         args.push(value.to_string());
     }
-    let data = run_ao_json_cmd(&args, 15).await?;
+    let data = run_fleet_project_json_cmd(&project_root, &args, 15).await?;
     let tasks = data.as_array().cloned().unwrap_or_default();
     Ok(tasks
         .iter()
@@ -1790,14 +1536,9 @@ async fn list_tasks_full(
     } else {
         "list"
     };
-    run_ao_json_cmd(
-        &[
-            "task".to_string(),
-            subcommand.to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
-        ],
+    run_fleet_project_json_cmd(
+        &project_root,
+        &["task".to_string(), subcommand.to_string()],
         15,
     )
     .await
@@ -1805,13 +1546,11 @@ async fn list_tasks_full(
 
 #[tauri::command]
 async fn get_task_detail(project_root: String, id: String) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
+    run_fleet_project_json_cmd(
+        &project_root,
         &[
             "task".to_string(),
             "get".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
             "--id".to_string(),
             id,
         ],
@@ -1822,14 +1561,9 @@ async fn get_task_detail(project_root: String, id: String) -> Result<serde_json:
 
 #[tauri::command]
 async fn get_task_stats(project_root: String) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
-        &[
-            "task".to_string(),
-            "stats".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
-        ],
+    run_fleet_project_json_cmd(
+        &project_root,
+        &["task".to_string(), "stats".to_string()],
         15,
     )
     .await
@@ -1837,17 +1571,7 @@ async fn get_task_stats(project_root: String) -> Result<serde_json::Value, Strin
 
 #[tauri::command]
 async fn get_next_task(project_root: String) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
-        &[
-            "task".to_string(),
-            "next".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
-        ],
-        15,
-    )
-    .await
+    run_fleet_project_json_cmd(&project_root, &["task".to_string(), "next".to_string()], 15).await
 }
 
 #[tauri::command]
@@ -1858,9 +1582,6 @@ async fn create_task(
     let mut args = vec![
         "task".to_string(),
         "create".to_string(),
-        "--json".to_string(),
-        "--project-root".to_string(),
-        project_root,
         "--title".to_string(),
         payload.title,
     ];
@@ -1876,7 +1597,7 @@ async fn create_task(
         args.push("--priority".to_string());
         args.push(priority);
     }
-    run_ao_json_cmd(&args, 15).await
+    run_fleet_project_json_cmd(&project_root, &args, 15).await
 }
 
 #[tauri::command]
@@ -1887,9 +1608,6 @@ async fn update_task_detail(
     let mut args = vec![
         "task".to_string(),
         "update".to_string(),
-        "--json".to_string(),
-        "--project-root".to_string(),
-        project_root,
         "--id".to_string(),
         payload.id,
     ];
@@ -1913,7 +1631,7 @@ async fn update_task_detail(
         args.push("--assignee".to_string());
         args.push(assignee);
     }
-    run_ao_json_cmd(&args, 15).await
+    run_fleet_project_json_cmd(&project_root, &args, 15).await
 }
 
 #[tauri::command]
@@ -1922,13 +1640,11 @@ async fn set_task_status(
     id: String,
     status: String,
 ) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
+    run_fleet_project_json_cmd(
+        &project_root,
         &[
             "task".to_string(),
             "status".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
             "--id".to_string(),
             id,
             "--status".to_string(),
@@ -1951,9 +1667,6 @@ async fn assign_task(
     let mut args = vec![
         "task".to_string(),
         "assign".to_string(),
-        "--json".to_string(),
-        "--project-root".to_string(),
-        project_root,
         "--id".to_string(),
         id,
         "--assignee".to_string(),
@@ -1971,7 +1684,7 @@ async fn assign_task(
         args.push("--model".to_string());
         args.push(value);
     }
-    run_ao_json_cmd(&args, 15).await
+    run_fleet_project_json_cmd(&project_root, &args, 15).await
 }
 
 #[tauri::command]
@@ -1980,13 +1693,11 @@ async fn set_task_priority(
     id: String,
     priority: String,
 ) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
+    run_fleet_project_json_cmd(
+        &project_root,
         &[
             "task".to_string(),
             "set-priority".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
             "--id".to_string(),
             id,
             "--priority".to_string(),
@@ -2006,9 +1717,6 @@ async fn set_task_deadline(
     let mut args = vec![
         "task".to_string(),
         "set-deadline".to_string(),
-        "--json".to_string(),
-        "--project-root".to_string(),
-        project_root,
         "--id".to_string(),
         id,
     ];
@@ -2016,7 +1724,7 @@ async fn set_task_deadline(
         args.push("--deadline".to_string());
         args.push(value);
     }
-    run_ao_json_cmd(&args, 15).await
+    run_fleet_project_json_cmd(&project_root, &args, 15).await
 }
 
 #[tauri::command]
@@ -2025,13 +1733,11 @@ async fn add_task_checklist_item(
     id: String,
     description: String,
 ) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
+    run_fleet_project_json_cmd(
+        &project_root,
         &[
             "task".to_string(),
             "checklist-add".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
             "--id".to_string(),
             id,
             "--description".to_string(),
@@ -2049,13 +1755,11 @@ async fn update_task_checklist_item(
     item_id: String,
     completed: bool,
 ) -> Result<serde_json::Value, String> {
-    run_ao_json_cmd(
+    run_fleet_project_json_cmd(
+        &project_root,
         &[
             "task".to_string(),
             "checklist-update".to_string(),
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root,
             "--id".to_string(),
             id,
             "--item-id".to_string(),
