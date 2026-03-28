@@ -2,6 +2,9 @@ export interface Project {
   name: string;
   root: string;
   enabled: boolean;
+  teamId: string;
+  teamSlug: string;
+  teamName: string;
 }
 
 export interface DaemonHealth {
@@ -63,6 +66,10 @@ export interface TaskSummary {
 export interface FleetProject {
   name: string;
   root: string;
+  enabled: boolean;
+  teamId: string;
+  teamSlug: string;
+  teamName: string;
   health: DaemonHealth | null;
   workflows: WorkflowInfo[];
   tasks: TaskSummary | null;

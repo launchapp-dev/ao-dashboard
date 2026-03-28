@@ -309,7 +309,12 @@ export function FleetFlow({ health, events, projects }: Props) {
                         : "bg-muted-foreground/30",
                   )}
                 />
-                <span className="truncate">{p.name}</span>
+                <div className="min-w-0">
+                  <div className="truncate">{p.name}</div>
+                  <div className="truncate text-[10px] uppercase tracking-widest text-muted-foreground/50">
+                    {p.teamSlug}
+                  </div>
+                </div>
               </button>
             );
           })}
@@ -320,7 +325,12 @@ export function FleetFlow({ health, events, projects }: Props) {
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Topology map</div>
             <div className="mt-1 text-sm text-foreground">
-              {projects.find((project) => project.root === selectedProject)?.name ?? "Select a project"} execution path from infrastructure to phase runtime.
+              {(() => {
+                const project = projects.find((entry) => entry.root === selectedProject);
+                return project
+                  ? `${project.teamName} / ${project.name} execution path from infrastructure to phase runtime.`
+                  : "Select a project execution path from infrastructure to phase runtime.";
+              })()}
             </div>
           </div>
           <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">

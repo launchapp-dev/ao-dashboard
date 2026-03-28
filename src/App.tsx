@@ -225,6 +225,10 @@ function App() {
   const fleet: FleetProject[] = projects.map((p) => ({
     name: p.name,
     root: p.root,
+    enabled: p.enabled,
+    teamId: p.teamId,
+    teamSlug: p.teamSlug,
+    teamName: p.teamName,
     health: healthByRoot.get(p.root) || null,
     workflows: workflows[p.root] || [],
     tasks: tasks[p.root] || null,
@@ -233,6 +237,7 @@ function App() {
   const totalAgents = health.reduce((sum, item) => sum + item.active_agents, 0);
   const totalQueue = health.reduce((sum, item) => sum + item.queued_tasks, 0);
   const totalTasks = Object.values(tasks).reduce((sum, item) => sum + item.total, 0);
+  const totalTeams = new Set(projects.map((project) => project.teamId)).size;
   const runningProjects = health.filter((item) => item.status === "running").length;
   const errors = events.filter((event) => event.level === "error").length;
   const activeMeta = TAB_META.find((tab) => tab.id === activeTab) ?? TAB_META[0];
@@ -240,7 +245,7 @@ function App() {
   const fleetStatusLabel = errors > 0 ? "Attention needed" : totalQueue > 20 ? "Queue pressure" : "Stable";
 
   const tabMetrics: Record<AppTab, string> = {
-    overview: formatCount(projects.length),
+    overview: formatCount(totalTeams),
     flow: formatCount(runningProjects),
     stream: formatCount(events.length),
     tasks: formatCount(totalTasks),
@@ -364,6 +369,7 @@ function App() {
 
             <div className="flex items-center gap-3">
               <CompactHeaderMetric label="Live" value={`${runningProjects}/${projects.length}`} tone={fleetStatusTone} />
+              <CompactHeaderMetric label="Teams" value={formatCount(totalTeams)} />
               <CompactHeaderMetric label="Queue" value={formatCount(totalQueue)} tone={totalQueue > 20 ? "warning" : "default"} />
             </div>
           </header>

@@ -28,6 +28,17 @@ const TASK_COLORS: Record<string, string> = {
 };
 
 interface Props { projects: FleetProject[]; events: StreamEvent[]; globalAoInfo?: GlobalAoInfo | null; }
+interface TeamBucket {
+  teamId: string;
+  teamSlug: string;
+  teamName: string;
+  projects: FleetProject[];
+  enabledCount: number;
+  runningCount: number;
+  idleCount: number;
+  driftCount: number;
+}
+
 type StreamFilter =
   | { type: "all" }
   | { type: "active-runs"; workflowIds: string[]; workflowRefs: string[]; taskIds: string[]; label: string }
@@ -120,10 +131,56 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
     return grouped;
   }, [events]);
 
+  const teamBuckets = useMemo<TeamBucket[]>(() => {
+    const grouped = new Map<string, TeamBucket>();
+
+    for (const project of projects) {
+      const existing = grouped.get(project.teamId);
+      if (existing) {
+        existing.projects.push(project);
+      } else {
+        grouped.set(project.teamId, {
+          teamId: project.teamId,
+          teamSlug: project.teamSlug,
+          teamName: project.teamName,
+          projects: [project],
+          enabledCount: 0,
+          runningCount: 0,
+          idleCount: 0,
+          driftCount: 0,
+        });
+      }
+    }
+
+    return [...grouped.values()]
+      .map((team) => {
+        const sortedProjects = [...team.projects].sort((left, right) => {
+          return Number(right.enabled) - Number(left.enabled) || left.name.localeCompare(right.name);
+        });
+        const enabledCount = sortedProjects.filter((project) => project.enabled).length;
+        const runningCount = sortedProjects.filter((project) => project.health?.status === "running").length;
+        const idleCount = sortedProjects.filter((project) => !project.enabled).length;
+        const driftCount = sortedProjects.filter((project) => project.enabled && project.health?.status !== "running").length;
+
+        return {
+          ...team,
+          projects: sortedProjects,
+          enabledCount,
+          runningCount,
+          idleCount,
+          driftCount,
+        };
+      })
+      .sort((left, right) => left.teamName.localeCompare(right.teamName));
+  }, [projects]);
+
   const totalAgents = projects.reduce((s, p) => s + (p.health?.active_agents || 0), 0);
   const totalPool = projects.reduce((s, p) => s + (p.health?.pool_size || 0), 0);
   const totalQueue = projects.reduce((s, p) => s + (p.health?.queued_tasks || 0), 0);
   const totalTasks = projects.reduce((s, p) => s + (p.tasks?.total || 0), 0);
+  const enabledProjects = projects.filter((project) => project.enabled).length;
+  const driftProjects = projects.filter((project) => project.enabled && project.health?.status !== "running").length;
+  const activeTeams = teamBuckets.filter((team) => team.runningCount > 0).length;
 
   const statusData = Object.entries(
     projects.reduce<Record<string, number>>((acc, p) => {
@@ -133,24 +190,33 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
     }, {})
   ).map(([name, value]) => ({ name, value }));
 
-  const taskBarData = projects
-    .filter((p) => p.tasks && p.tasks.total > 0)
-    .map((p) => ({
-      name: p.name.replace("launchapp-", "").slice(0, 12),
-      done: p.tasks!.done, ready: p.tasks!.ready, backlog: p.tasks!.backlog,
-      blocked: p.tasks!.blocked, in_progress: p.tasks!.in_progress,
-    }));
+  const teamChartData = teamBuckets.map((team) => ({
+    name: team.teamSlug.replace("launchpad-", "lp-"),
+    running: team.runningCount,
+    drift: team.driftCount,
+    idle: team.idleCount,
+  }));
 
-  const attentionProjects = useMemo(() => {
-    return projects
-      .map((project) => ({
-        project,
-        state: getProjectState(project, eventsByProjectRoot.get(project.root) ?? []),
-      }))
-      .filter(({ state }) => state.score >= 3)
-      .sort((left, right) => right.state.score - left.state.score)
+  const attentionTeams = useMemo(() => {
+    return teamBuckets
+      .map((team) => {
+        const topProject = [...team.projects]
+          .map((project) => ({
+            project,
+            state: getProjectState(project, eventsByProjectRoot.get(project.root) ?? []),
+          }))
+          .sort((left, right) => right.state.score - left.state.score)[0];
+
+        return {
+          team,
+          topProject,
+          score: Math.max(team.driftCount >= 1 ? 4 : 1, topProject?.state.score ?? 1),
+        };
+      })
+      .filter(({ score }) => score >= 3)
+      .sort((left, right) => right.score - left.score)
       .slice(0, 3);
-  }, [eventsByProjectRoot, projects]);
+  }, [eventsByProjectRoot, teamBuckets]);
 
   if (selected) {
     return (
@@ -167,37 +233,46 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
       <div className="max-w-[1600px] mx-auto p-6 space-y-8">
         {/* KPI Section */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <KPICard label="Total Projects" value={projects.length} />
-          <KPICard label="Active Agents" value={`${totalAgents}/${totalPool}`} />
-          <KPICard label="Total Tasks" value={totalTasks} />
-          <KPICard label="Fleet Queue" value={totalQueue} tone={totalQueue > 20 ? "warning" : "default"} />
+          <KPICard label="Teams" value={teamBuckets.length} />
+          <KPICard label="Enabled Projects" value={`${enabledProjects}/${projects.length}`} />
+          <KPICard label="Running Teams" value={`${activeTeams}/${teamBuckets.length}`} />
+          <KPICard label="Fleet Drift" value={driftProjects} tone={driftProjects > 0 ? "warning" : "default"} />
         </div>
 
         {/* Attention Lane */}
-        {attentionProjects.length > 0 && (
+        {attentionTeams.length > 0 && (
           <section className="space-y-4">
             <div className="flex items-end justify-between px-1">
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-widest text-primary/80">Attention Required</h3>
-                <p className="text-sm text-muted-foreground mt-1">Projects requiring immediate operator intervention.</p>
+                <p className="text-sm text-muted-foreground mt-1">Teams with drift or unhealthy project signals.</p>
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
-              {attentionProjects.map(({ project, state }) => (
+              {attentionTeams.map(({ team, topProject, score }) => (
                 <button
-                  key={`${project.root}:attention`}
-                  onClick={() => setSelectedRoot(project.root)}
+                  key={`${team.teamId}:attention`}
+                  onClick={() => topProject && setSelectedRoot(topProject.project.root)}
                   className="group relative flex flex-col p-5 text-left rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 transition-all duration-300"
                 >
                   <div className="flex justify-between items-start mb-4">
-                    <span className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{project.name}</span>
-                    <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", stateToneClasses(state.tone))}>
-                      {state.label}
+                    <div>
+                      <span className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{team.teamName}</span>
+                      <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">{team.teamSlug}</div>
+                    </div>
+                    <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", score >= 4 ? stateToneClasses("blocked") : stateToneClasses("degraded"))}>
+                      {team.driftCount > 0 ? `${team.driftCount} drifting` : topProject?.state.label ?? "Watch"}
                     </span>
                   </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2 flex-1 mb-4">{state.summary}</p>
+                  <p className="text-sm text-muted-foreground line-clamp-2 flex-1 mb-4">
+                    {team.driftCount > 0
+                      ? `${team.driftCount} enabled project${team.driftCount === 1 ? "" : "s"} are not currently running.`
+                      : topProject?.state.summary ?? "This team needs operator attention."}
+                  </p>
                   <div className="pt-4 border-t border-white/5 flex items-center justify-between text-xs">
-                    <span className="font-medium text-foreground">{state.action}</span>
+                    <span className="font-medium text-foreground">
+                      {topProject ? `Open ${topProject.project.name}` : "Inspect team"}
+                    </span>
                     <span className="text-muted-foreground">Open →</span>
                   </div>
                 </button>
@@ -210,38 +285,47 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
         <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
             <div className="rounded-2xl border border-white/5 bg-card/20 p-6">
-              <h3 className="text-sm font-bold text-foreground mb-6">Project Activity & Task Distribution</h3>
+              <div className="mb-6 flex items-end justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Team Activity</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">Running, drifting, and idle project mix by team.</p>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                  <LegendDot color="#5d9a80" label="Running" />
+                  <LegendDot color="#c3893d" label="Drift" />
+                  <LegendDot color="#5a6474" label="Idle" />
+                </div>
+              </div>
               <div className="h-[280px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={taskBarData} barSize={20}>
+                  <BarChart data={teamChartData} barSize={22}>
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
                     <Tooltip 
                       cursor={{ fill: "rgba(255,255,255,0.05)" }}
                       contentStyle={{ background: "#0f1115", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px" }}
                     />
-                    <Bar dataKey="done" stackId="a" fill={TASK_COLORS.done} radius={[0, 0, 0, 0]} />
-                    <Bar dataKey="ready" stackId="a" fill={TASK_COLORS.ready} />
-                    <Bar dataKey="in_progress" stackId="a" fill={TASK_COLORS.in_progress} />
-                    <Bar dataKey="blocked" stackId="a" fill={TASK_COLORS.blocked} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="running" stackId="a" fill={STATUS_COLORS.running} />
+                    <Bar dataKey="drift" stackId="a" fill={TASK_COLORS.blocked} />
+                    <Bar dataKey="idle" stackId="a" fill={STATUS_COLORS.stopped} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
-            {/* Project List */}
+            {/* Team List */}
             <div className="rounded-2xl border border-white/5 bg-card/20 overflow-hidden">
               <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-foreground">All Fleet Projects</h3>
-                <span className="text-xs text-muted-foreground">{projects.length} connected</span>
+                <h3 className="text-sm font-bold text-foreground">Company Teams</h3>
+                <span className="text-xs text-muted-foreground">{teamBuckets.length} teams / {projects.length} projects</span>
               </div>
               <div className="divide-y divide-white/5">
-                {projects.map((p) => (
-                  <OverviewProjectRow
-                    key={p.root}
-                    project={p}
-                    events={eventsByProjectRoot.get(p.root) ?? []}
-                    onClick={() => setSelectedRoot(p.root)}
+                {teamBuckets.map((team) => (
+                  <TeamSection
+                    key={team.teamId}
+                    team={team}
+                    eventsByProjectRoot={eventsByProjectRoot}
+                    onProjectClick={(root) => setSelectedRoot(root)}
                   />
                 ))}
               </div>
@@ -273,6 +357,15 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
                 ))}
               </div>
             </div>
+
+            <div className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <h3 className="text-sm font-bold text-foreground mb-4">Company Pulse</h3>
+              <div className="space-y-3 text-xs">
+                <MiniStat label="Active Agents" value={`${totalAgents}/${totalPool}`} tone="text-foreground" />
+                <MiniStat label="Fleet Queue" value={totalQueue} tone={totalQueue > 20 ? "text-chart-4" : "text-foreground"} />
+                <MiniStat label="Tasks Observed" value={totalTasks} tone="text-foreground" />
+              </div>
+            </div>
           </aside>
         </div>
       </div>
@@ -287,6 +380,63 @@ function KPICard({ label, value, tone = "default" }: { label: string; value: str
       <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{label}</div>
       <div className={cn("text-2xl font-bold", toneClass)}>{value}</div>
     </div>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function TeamSection({
+  team,
+  eventsByProjectRoot,
+  onProjectClick,
+}: {
+  team: TeamBucket;
+  eventsByProjectRoot: Map<string, StreamEvent[]>;
+  onProjectClick: (root: string) => void;
+}) {
+  return (
+    <section className="px-6 py-5">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold text-foreground">{team.teamName}</div>
+          <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">{team.teamSlug}</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-wider">
+          <span className="rounded border border-chart-1/30 bg-chart-1/10 px-2 py-1 text-chart-1">
+            {team.runningCount} running
+          </span>
+          <span className={cn(
+            "rounded border px-2 py-1",
+            team.driftCount > 0
+              ? "border-chart-4/30 bg-chart-4/10 text-chart-4"
+              : "border-white/10 bg-white/5 text-muted-foreground"
+          )}>
+            {team.driftCount} drift
+          </span>
+          <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground">
+            {team.idleCount} idle
+          </span>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-white/5">
+        {team.projects.map((project) => (
+          <OverviewProjectRow
+            key={project.root}
+            project={project}
+            events={eventsByProjectRoot.get(project.root) ?? []}
+            onClick={() => onProjectClick(project.root)}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -364,6 +514,16 @@ function formatBytes(bytes: number) {
 type ProjectStateTone = "failed" | "blocked" | "degraded" | "healthy" | "idle";
 
 function getProjectState(project: FleetProject, events: StreamEvent[]) {
+  if (!project.enabled) {
+    return {
+      tone: "idle" as const,
+      label: "Held",
+      summary: "Project is registered to the fleet but currently disabled by company policy.",
+      action: "Review policy",
+      score: 1,
+    };
+  }
+
   const status = project.health?.status ?? "offline";
   const queueDepth = project.health?.queued_tasks ?? 0;
   const utilization = project.health?.pool_utilization_percent ?? 0;
@@ -431,6 +591,14 @@ function OverviewProjectRow({ project: p, events, onClick }: { project: FleetPro
         <div className="flex items-center gap-3">
           <span className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{p.name}</span>
           <span className="text-xs text-muted-foreground font-medium">{status}</span>
+          <span className={cn(
+            "rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
+            p.enabled
+              ? "border-primary/20 bg-primary/10 text-primary"
+              : "border-white/10 bg-white/5 text-muted-foreground"
+          )}>
+            {p.enabled ? "enabled" : "idle"}
+          </span>
         </div>
         <div className="mt-1 text-sm text-muted-foreground line-clamp-1">{state.summary}</div>
       </div>

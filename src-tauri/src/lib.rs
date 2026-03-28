@@ -10,14 +10,36 @@ use tokio::process::Command;
 use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub name: String,
     pub root: String,
     pub enabled: bool,
+    pub team_id: String,
+    pub team_slug: String,
+    pub team_name: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct FleetProjectRecord {
+    pub team_id: String,
+    pub slug: String,
+    pub ao_project_root: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetTeamRecord {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+struct FleetProjectSnapshot {
+    pub team_id: String,
+    pub team_slug: String,
+    pub team_name: String,
     pub slug: String,
     pub ao_project_root: String,
     pub enabled: bool,
@@ -413,12 +435,42 @@ fn summarize_log_file(path: &Path, name: &str) -> AoLogInfo {
     }
 }
 
-async fn load_fleet_projects() -> Result<Vec<FleetProjectRecord>, String> {
-    let data = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+async fn load_fleet_projects() -> Result<Vec<FleetProjectSnapshot>, String> {
+    let project_data = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let team_data = run_fleet_json_cmd_str(&["team-list"], 15).await?;
     let mut projects: Vec<FleetProjectRecord> =
-        serde_json::from_value(data).map_err(|error| error.to_string())?;
-    projects.sort_by(|left, right| left.slug.cmp(&right.slug));
-    Ok(projects)
+        serde_json::from_value(project_data).map_err(|error| error.to_string())?;
+    let teams: Vec<FleetTeamRecord> =
+        serde_json::from_value(team_data).map_err(|error| error.to_string())?;
+    let team_map = teams
+        .into_iter()
+        .map(|team| (team.id.clone(), team))
+        .collect::<HashMap<_, _>>();
+
+    let mut snapshots = projects
+        .drain(..)
+        .map(|project| {
+            let team = team_map.get(&project.team_id);
+            FleetProjectSnapshot {
+                team_id: project.team_id.clone(),
+                team_slug: team
+                    .map(|record| record.slug.clone())
+                    .unwrap_or_else(|| "unassigned".to_string()),
+                team_name: team
+                    .map(|record| record.name.clone())
+                    .unwrap_or_else(|| "Unassigned".to_string()),
+                slug: project.slug,
+                ao_project_root: project.ao_project_root,
+                enabled: project.enabled,
+            }
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| {
+        left.team_slug
+            .cmp(&right.team_slug)
+            .then(left.slug.cmp(&right.slug))
+    });
+    Ok(snapshots)
 }
 
 fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
@@ -451,6 +503,9 @@ async fn discover_projects() -> Result<Vec<Project>, String> {
             name: project.slug,
             root: project.ao_project_root,
             enabled: project.enabled,
+            team_id: project.team_id,
+            team_slug: project.team_slug,
+            team_name: project.team_name,
         })
         .collect())
 }
@@ -1247,6 +1302,10 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
             serde_json::json!({
                 "name": project.slug,
                 "root": project.ao_project_root,
+                "enabled": project.enabled,
+                "teamId": project.team_id,
+                "teamSlug": project.team_slug,
+                "teamName": project.team_name,
                 "health": health,
                 "workflows": [],
                 "tasks": serde_json::Value::Null,

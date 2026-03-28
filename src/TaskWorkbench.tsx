@@ -106,7 +106,31 @@ interface Props {
   projects: Project[];
 }
 
+function groupProjectsByTeam(projects: Project[]) {
+  const grouped = new Map<string, { teamName: string; projects: Project[] }>();
+
+  for (const project of projects) {
+    const entry = grouped.get(project.teamId);
+    if (entry) {
+      entry.projects.push(project);
+    } else {
+      grouped.set(project.teamId, {
+        teamName: project.teamName,
+        projects: [project],
+      });
+    }
+  }
+
+  return [...grouped.values()]
+    .map((entry) => ({
+      ...entry,
+      projects: [...entry.projects].sort((left, right) => left.name.localeCompare(right.name)),
+    }))
+    .sort((left, right) => left.teamName.localeCompare(right.teamName));
+}
+
 export function TaskWorkbench({ projects }: Props) {
+  const projectsByTeam = groupProjectsByTeam(projects);
   const [selectedProjectRoot, setSelectedProjectRoot] = useState(projects[0]?.root ?? "");
   const [prioritized] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -682,7 +706,15 @@ export function TaskWorkbench({ projects }: Props) {
               onChange={(e) => setSelectedProjectRoot(e.target.value)}
               className="w-full h-10 bg-white/5 border border-white/5 rounded-xl px-3 text-sm font-medium outline-none focus:border-primary/50"
             >
-              {projects.map((p) => <option key={p.root} value={p.root}>{p.name}</option>)}
+              {projectsByTeam.map((group) => (
+                <optgroup key={group.teamName} label={group.teamName}>
+                  {group.projects.map((p) => (
+                    <option key={p.root} value={p.root}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
 
             <div className="flex gap-2">
