@@ -1620,6 +1620,27 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
     }))
 }
 
+#[tauri::command]
+async fn get_founder_overview() -> Result<serde_json::Value, String> {
+    let teams_value = run_fleet_json_cmd_str(&["team-list"], 10).await?;
+    let teams = teams_value
+        .as_array()
+        .cloned()
+        .ok_or_else(|| "team-list did not return an array".to_string())?;
+
+    let mut snapshots = Vec::with_capacity(teams.len());
+    for team in teams {
+        let team_id = team["id"]
+            .as_str()
+            .ok_or_else(|| "team-list entry missing id".to_string())?;
+        snapshots.push(get_team_snapshot(team_id.to_string()).await?);
+    }
+
+    Ok(serde_json::json!({
+        "teams": snapshots,
+    }))
+}
+
 fn preset_windows(policy_kind: &str) -> Vec<String> {
     match policy_kind {
         "business_hours" => ["0,9,17", "1,9,17", "2,9,17", "3,9,17", "4,9,17"]
@@ -2425,6 +2446,7 @@ pub fn run() {
             get_workflows,
             get_task_summary,
             get_fleet_data,
+            get_founder_overview,
             get_team_snapshot,
             set_team_enabled,
             run_team_daemon_action,

@@ -8,6 +8,7 @@ import type {
   AoSessionExit,
   AoSessionOutput,
   AoSessionStarted,
+  FleetFounderOverview,
   FleetTeamSnapshot,
   GlobalAoInfo,
   Project,
@@ -165,6 +166,8 @@ interface TeamCommandCard {
   latestPolicy: string | null;
   latestReason: string | null;
   previewCount: number;
+  hostPreview: string[];
+  reconcileDetails: string[];
 }
 
 const TEAM_POLICY_PRESETS = [
@@ -173,6 +176,15 @@ const TEAM_POLICY_PRESETS = [
   { label: "Business Hours", policy: "business_hours" },
   { label: "Nightly", policy: "nightly" },
   { label: "Burst On Backlog", policy: "burst_on_backlog" },
+] as const;
+
+const TEAM_OVERRIDE_ACTIONS = [
+  { label: "Enable", action: "enable" },
+  { label: "Disable", action: "disable" },
+  { label: "Start", action: "start" },
+  { label: "Stop", action: "stop" },
+  { label: "Pause", action: "pause" },
+  { label: "Resume", action: "resume" },
 ] as const;
 
 function groupProjectsByTeam(projects: Project[]) {
@@ -269,8 +281,7 @@ export function CommandCenter({
   const configuredProviders = globalAoInfo?.providers.filter((provider) => provider.configured).length ?? 0;
 
   const refreshTeamSnapshots = useCallback(async () => {
-    const uniqueTeamIds = [...new Set(projects.map((project) => project.teamId))];
-    if (uniqueTeamIds.length === 0) {
+    if (projects.length === 0) {
       setTeamSnapshots({});
       return;
     }
@@ -278,29 +289,15 @@ export function CommandCenter({
     setTeamLoading(true);
     setTeamError(null);
     try {
-      const loaded = await Promise.allSettled(
-        uniqueTeamIds.map(async (teamId) => {
-          const snapshot = await invoke<FleetTeamSnapshot>("get_team_snapshot", { teamId });
-          return [teamId, snapshot] as const;
-        }),
-      );
-
+      const overview = await invoke<FleetFounderOverview>("get_founder_overview");
       const next: Record<string, FleetTeamSnapshot> = {};
-      const errors: string[] = [];
-
-      for (const result of loaded) {
-        if (result.status === "fulfilled") {
-          const [teamId, snapshot] = result.value;
-          next[teamId] = snapshot;
-        } else {
-          errors.push(String(result.reason));
-        }
+      for (const snapshot of overview.teams) {
+        next[snapshot.team.id] = snapshot;
       }
-
       setTeamSnapshots(next);
-      if (errors.length > 0) {
-        setTeamError(errors.slice(0, 3).join(" | "));
-      }
+      setTeamError(null);
+    } catch (error) {
+      setTeamError(String(error));
     } finally {
       setTeamLoading(false);
     }
@@ -323,6 +320,11 @@ export function CommandCenter({
       const latestReason = snapshot?.reconcilePreview.results[0]
         ? describeReconcileRow(snapshot.reconcilePreview.results[0])
         : null;
+      const hostPreview = (snapshot?.hosts ?? []).slice(0, 2).map((host) => host.name);
+      const reconcileDetails = (snapshot?.reconcilePreview.results ?? [])
+        .filter((row) => row.action)
+        .slice(0, 2)
+        .map((row) => describeReconcileRow(row));
 
       return {
         teamId: team.teamId,
@@ -343,6 +345,8 @@ export function CommandCenter({
         latestPolicy,
         latestReason,
         previewCount: snapshot?.reconcilePreview.results.filter((row) => row.action).length ?? 0,
+        hostPreview,
+        reconcileDetails,
       };
     });
   }, [health, teamBuckets, teamSnapshots]);
@@ -418,6 +422,26 @@ export function CommandCenter({
     setTeamError(null);
     try {
       await invoke("reconcile_team", { teamId, apply });
+      await refreshTeamSnapshots();
+    } catch (actionError) {
+      setTeamError(String(actionError));
+    } finally {
+      setTeamAction(null);
+    }
+  };
+
+  const runTeamOverride = async (
+    teamId: string,
+    action: (typeof TEAM_OVERRIDE_ACTIONS)[number]["action"],
+  ) => {
+    setTeamAction(`${teamId}:override:${action}`);
+    setTeamError(null);
+    try {
+      if (action === "enable" || action === "disable") {
+        await invoke("set_team_enabled", { teamId, enabled: action === "enable" });
+      } else {
+        await invoke("run_team_daemon_action", { teamId, action });
+      }
       await refreshTeamSnapshots();
     } catch (actionError) {
       setTeamError(String(actionError));
@@ -645,9 +669,9 @@ export function CommandCenter({
                       </div>
                     </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {TEAM_POLICY_PRESETS.map((preset) => (
-                        <button
+	                    <div className="mt-4 flex flex-wrap gap-2">
+	                      {TEAM_POLICY_PRESETS.map((preset) => (
+	                        <button
                           key={`${team.teamId}:${preset.policy}`}
                           onClick={() => void runTeamPolicy(team.teamId, preset.policy, true)}
                           disabled={teamAction !== null}
@@ -668,12 +692,25 @@ export function CommandCenter({
                         disabled={teamAction !== null}
                         className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-1.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
                       >
-                        {teamAction === `${team.teamId}:apply` ? "Reconciling…" : "Reconcile Now"}
-                      </button>
-                    </div>
+	                        {teamAction === `${team.teamId}:apply` ? "Reconciling…" : "Reconcile Now"}
+	                      </button>
+	                    </div>
 
-                    <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+	                    <div className="mt-3 flex flex-wrap gap-2">
+	                      {TEAM_OVERRIDE_ACTIONS.map((override) => (
+	                        <button
+	                          key={`${team.teamId}:override:${override.action}`}
+	                          onClick={() => void runTeamOverride(team.teamId, override.action)}
+	                          disabled={teamAction !== null}
+	                          className="rounded-lg border border-white/10 bg-black/10 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+	                        >
+	                          {teamAction === `${team.teamId}:override:${override.action}` ? "Working…" : override.label}
+	                        </button>
+	                      ))}
+	                    </div>
+
+	                    <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+	                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Policy</div>
                         <div className="mt-1 font-medium text-foreground">{formatPolicyName(team.latestPolicy)}</div>
                       </div>
@@ -685,14 +722,37 @@ export function CommandCenter({
                         <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Latest Audit</div>
                         <div className="mt-1 font-medium text-foreground">{team.latestAudit ?? "No audit activity yet"}</div>
                       </div>
-                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Projects</div>
-                        <div className="mt-1 font-medium text-foreground">{team.enabledCount}/{team.projectCount} enabled</div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-            </div>
+	                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+	                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Projects</div>
+	                        <div className="mt-1 font-medium text-foreground">{team.enabledCount}/{team.projectCount} enabled</div>
+	                      </div>
+	                    </div>
+
+	                    <div className="mt-4 grid gap-2 text-xs text-muted-foreground">
+	                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+	                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Hosts</div>
+	                        <div className="mt-1 font-medium text-foreground">
+	                          {team.hostPreview.length > 0 ? team.hostPreview.join(" · ") : "Local-only routing"}
+	                        </div>
+	                      </div>
+	                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+	                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Reconcile Detail</div>
+	                        <div className="mt-1 space-y-1">
+	                          {team.reconcileDetails.length > 0 ? (
+	                            team.reconcileDetails.map((detail) => (
+	                              <div key={detail} className="text-foreground">
+	                                {detail}
+	                              </div>
+	                            ))
+	                          ) : (
+	                            <div className="text-foreground">No pending reconcile actions.</div>
+	                          )}
+	                        </div>
+	                      </div>
+	                    </div>
+	                  </div>
+	                ))}
+	            </div>
           </div>
 
           <div className="space-y-3">

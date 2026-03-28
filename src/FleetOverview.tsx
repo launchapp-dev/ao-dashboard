@@ -851,12 +851,15 @@ function TeamDetail({
               </div>
             </section>
 
-            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-foreground">Reconcile</h3>
-                <span className="text-xs text-muted-foreground">{reconcileSummary.total}</span>
-              </div>
-              <div className="mt-4 space-y-4">
+	            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+	              <div className="flex items-center justify-between">
+	                <h3 className="text-sm font-bold text-foreground">Reconcile</h3>
+	                <span className="text-xs text-muted-foreground">
+	                  {reconcileSummary.total}
+	                  {snapshot?.reconcilePreview.evaluatedAt ? ` · ${new Date(snapshot.reconcilePreview.evaluatedAt).toLocaleString()}` : ""}
+	                </span>
+	              </div>
+	              <div className="mt-4 space-y-4">
                 <div className="flex gap-2">
                   <button
                     onClick={() => void reconcileTeam(false)}
@@ -878,9 +881,9 @@ function TeamDetail({
                     ? `${reconcileSummary.actions} project action${reconcileSummary.actions === 1 ? "" : "s"} would run for this team.`
                     : "This team is already aligned with its current operating policy."}
                 </div>
-                {snapshot?.reconcilePreview.results.slice(0, 6).map((result) => (
-                  <div key={`${result.projectId}:${result.projectRoot}`} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-                    <div className="flex items-center justify-between gap-3">
+	                {snapshot?.reconcilePreview.results.slice(0, 6).map((result) => (
+	                  <div key={`${result.projectId}:${result.projectRoot}`} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+	                    <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-bold text-foreground">{result.projectRoot.split("/").pop()}</span>
                       <span className={cn(
                         "rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
@@ -889,15 +892,25 @@ function TeamDetail({
                         {result.action ?? "aligned"}
                       </span>
                     </div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      desired {result.desiredState} · observed {result.observedState ?? "unknown"}
-                    </div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      {describeTeamReconcileResult(result)}
-                    </div>
-                  </div>
-                ))}
-              </div>
+	                    <div className="mt-2 text-xs text-muted-foreground">
+	                      desired {result.desiredState} · observed {result.observedState ?? "unknown"}
+	                    </div>
+	                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+	                      <span className="rounded border border-white/10 bg-black/10 px-2 py-1">
+	                        backlog {result.backlogCount ?? 0}
+	                      </span>
+	                      <span className="rounded border border-white/10 bg-black/10 px-2 py-1">
+	                        schedules {result.scheduleIds.length}
+	                      </span>
+	                    </div>
+	                    <div className="mt-2 text-xs text-muted-foreground">
+	                      {describeTeamReconcileResult(result)}
+	                    </div>
+	                    {renderReconcileTarget(result.target)}
+	                    {renderCommandResult(result.commandResult)}
+	                  </div>
+	                ))}
+	              </div>
             </section>
 
             <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
@@ -1082,6 +1095,50 @@ function describeScheduleWindows(policyKind: string, windows: unknown) {
     .filter(Boolean);
 
   return ranges.join(" / ");
+}
+
+function renderReconcileTarget(target: Record<string, unknown>) {
+  const resolution = typeof target.resolution === "string" ? target.resolution : null;
+  const transport = typeof target.transport === "string" ? target.transport : null;
+  const host = [
+    typeof target.host_name === "string" ? target.host_name : null,
+    typeof target.host_slug === "string" ? target.host_slug : null,
+    typeof target.host_address === "string" ? target.host_address : null,
+    typeof target.host_id === "string" ? target.host_id : null,
+  ].find(Boolean);
+
+  if (!resolution && !transport && !host) return null;
+
+  return (
+    <div className="mt-3 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Resolution</div>
+        <div className="mt-1 text-foreground">{resolution ?? "n/a"}</div>
+      </div>
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Transport</div>
+        <div className="mt-1 text-foreground">{transport ?? "n/a"}</div>
+      </div>
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Target Host</div>
+        <div className="mt-1 text-foreground">{host ?? "local"}</div>
+      </div>
+    </div>
+  );
+}
+
+function renderCommandResult(commandResult?: Record<string, unknown> | null) {
+  if (!commandResult || Object.keys(commandResult).length === 0) return null;
+
+  const state = typeof commandResult.state === "string" ? commandResult.state : null;
+  const message = typeof commandResult.message === "string" ? commandResult.message : null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/5 bg-black/10 px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Command Result</div>
+      <div className="mt-1 text-foreground">{message ?? state ?? "No command payload returned."}</div>
+    </div>
+  );
 }
 
 function describeTeamReconcileResult(result: FleetTeamSnapshot["reconcilePreview"]["results"][number]) {

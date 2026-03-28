@@ -205,6 +205,10 @@ export interface FleetTeamSnapshot {
   knowledgeFacts: FleetKnowledgeFact[];
 }
 
+export interface FleetFounderOverview {
+  teams: FleetTeamSnapshot[];
+}
+
 export interface AgentConfig {
   name: string;
   model: string;
