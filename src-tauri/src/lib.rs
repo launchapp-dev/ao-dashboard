@@ -52,6 +52,57 @@ struct FleetDaemonStatusRecord {
     pub observed_state: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct FleetManagedProjectRecord {
+    pub id: String,
+    pub team_id: String,
+    pub slug: String,
+    pub ao_project_root: String,
+    pub remote_url: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetScheduleRecord {
+    pub id: String,
+    pub team_id: String,
+    pub timezone: String,
+    pub policy_kind: String,
+    pub windows: serde_json::Value,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetAuditEventRecord {
+    pub id: String,
+    pub team_id: Option<String>,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub action: String,
+    pub actor_type: String,
+    pub actor_id: Option<String>,
+    pub summary: String,
+    pub details: serde_json::Value,
+    pub occurred_at: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetProjectPlacementRecord {
+    pub project_id: String,
+    pub host_id: String,
+    pub assignment_source: String,
+    pub assigned_at: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetHostRecord {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub address: String,
+    pub status: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DaemonHealth {
     pub project: String,
@@ -577,6 +628,19 @@ async fn run_fleet_json_cmd_str(
     timeout_secs: u64,
 ) -> Result<serde_json::Value, String> {
     let stdout = run_fleet_cmd_str(args, timeout_secs).await?;
+    serde_json::from_str(&stdout).map_err(|error| {
+        format!(
+            "failed to parse fleet json output: {error}: {}",
+            stdout.lines().next().unwrap_or("")
+        )
+    })
+}
+
+async fn run_fleet_json_cmd(
+    args: &[String],
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let stdout = run_fleet_cmd(args, timeout_secs).await?;
     serde_json::from_str(&stdout).map_err(|error| {
         format!(
             "failed to parse fleet json output: {error}: {}",
@@ -1281,6 +1345,209 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String> {
+    let team = run_fleet_json_cmd_str(&["team-get", "--id", &team_id], 10).await?;
+    let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let schedules_value = run_fleet_json_cmd_str(&["schedule-list"], 10).await?;
+    let audits_value =
+        run_fleet_json_cmd_str(&["audit-list", "--team-id", &team_id, "--limit", "40"], 10).await?;
+    let placements_value = run_fleet_json_cmd_str(&["project-host-list"], 10).await?;
+    let hosts_value = run_fleet_json_cmd_str(&["host-list"], 10).await?;
+
+    let projects: Vec<FleetManagedProjectRecord> =
+        serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
+    let schedules: Vec<FleetScheduleRecord> =
+        serde_json::from_value(schedules_value).map_err(|error| error.to_string())?;
+    let audits: Vec<FleetAuditEventRecord> =
+        serde_json::from_value(audits_value).map_err(|error| error.to_string())?;
+    let placements: Vec<FleetProjectPlacementRecord> =
+        serde_json::from_value(placements_value).map_err(|error| error.to_string())?;
+    let hosts: Vec<FleetHostRecord> =
+        serde_json::from_value(hosts_value).map_err(|error| error.to_string())?;
+
+    let relevant_projects = projects
+        .into_iter()
+        .filter(|project| project.team_id == team_id)
+        .collect::<Vec<_>>();
+    let relevant_project_ids = relevant_projects
+        .iter()
+        .map(|project| project.id.clone())
+        .collect::<HashSet<_>>();
+    let hosts_by_id = hosts
+        .into_iter()
+        .map(|host| (host.id.clone(), host))
+        .collect::<HashMap<_, _>>();
+
+    let project_rows = relevant_projects
+        .iter()
+        .map(|project| {
+            serde_json::json!({
+                "id": project.id,
+                "teamId": project.team_id,
+                "slug": project.slug,
+                "root": project.ao_project_root,
+                "remoteUrl": project.remote_url,
+                "enabled": project.enabled,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let schedule_rows = schedules
+        .into_iter()
+        .filter(|schedule| schedule.team_id == team_id)
+        .map(|schedule| {
+            serde_json::json!({
+                "id": schedule.id,
+                "teamId": schedule.team_id,
+                "timezone": schedule.timezone,
+                "policyKind": schedule.policy_kind,
+                "windows": schedule.windows,
+                "enabled": schedule.enabled,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let placement_rows = placements
+        .into_iter()
+        .filter(|placement| relevant_project_ids.contains(&placement.project_id))
+        .map(|placement| {
+            let host = hosts_by_id.get(&placement.host_id);
+            serde_json::json!({
+                "projectId": placement.project_id,
+                "hostId": placement.host_id,
+                "hostSlug": host.map(|host| host.slug.clone()),
+                "hostName": host.map(|host| host.name.clone()),
+                "hostAddress": host.map(|host| host.address.clone()),
+                "hostStatus": host.map(|host| host.status.clone()),
+                "assignmentSource": placement.assignment_source,
+                "assignedAt": placement.assigned_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let audit_rows = audits
+        .into_iter()
+        .map(|audit| {
+            serde_json::json!({
+                "id": audit.id,
+                "teamId": audit.team_id,
+                "entityType": audit.entity_type,
+                "entityId": audit.entity_id,
+                "action": audit.action,
+                "actorType": audit.actor_type,
+                "actorId": audit.actor_id,
+                "summary": audit.summary,
+                "details": audit.details,
+                "occurredAt": audit.occurred_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "team": {
+            "id": team["id"].as_str().unwrap_or(""),
+            "slug": team["slug"].as_str().unwrap_or(""),
+            "name": team["name"].as_str().unwrap_or(""),
+            "mission": team["mission"].as_str().unwrap_or(""),
+            "ownership": team["ownership"].as_str().unwrap_or(""),
+            "businessPriority": team["business_priority"].as_i64().unwrap_or(0),
+        },
+        "projects": project_rows,
+        "schedules": schedule_rows,
+        "placements": placement_rows,
+        "auditEvents": audit_rows,
+    }))
+}
+
+#[tauri::command]
+async fn set_team_enabled(team_id: String, enabled: bool) -> Result<serde_json::Value, String> {
+    let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let projects: Vec<FleetManagedProjectRecord> =
+        serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
+    let relevant_projects = projects
+        .into_iter()
+        .filter(|project| project.team_id == team_id)
+        .collect::<Vec<_>>();
+
+    let mut updated = Vec::new();
+    for project in relevant_projects {
+        let args = vec![
+            "project-update".to_string(),
+            "--id".to_string(),
+            project.id,
+            "--enabled".to_string(),
+            enabled.to_string(),
+        ];
+        updated.push(run_fleet_json_cmd(&args, 10).await?);
+    }
+
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "enabled": enabled,
+        "updatedProjects": updated.len(),
+        "projects": updated,
+    }))
+}
+
+#[tauri::command]
+async fn run_team_daemon_action(
+    team_id: String,
+    action: String,
+) -> Result<serde_json::Value, String> {
+    let allowed = ["start", "stop", "pause", "resume"];
+    if !allowed.contains(&action.as_str()) {
+        return Err(format!("unsupported team action: {action}"));
+    }
+
+    let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let projects: Vec<FleetManagedProjectRecord> =
+        serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
+    let relevant_projects = projects
+        .into_iter()
+        .filter(|project| {
+            project.team_id == team_id
+                && (matches!(action.as_str(), "stop" | "pause") || project.enabled)
+        })
+        .collect::<Vec<_>>();
+
+    let mut results = Vec::new();
+    for project in relevant_projects {
+        match run_fleet_project_json_cmd(
+            &project.ao_project_root,
+            &["daemon".to_string(), action.clone()],
+            20,
+        )
+        .await
+        {
+            Ok(value) => results.push(serde_json::json!({
+                "projectId": project.id,
+                "slug": project.slug,
+                "root": project.ao_project_root,
+                "ok": true,
+                "result": value,
+            })),
+            Err(error) => results.push(serde_json::json!({
+                "projectId": project.id,
+                "slug": project.slug,
+                "root": project.ao_project_root,
+                "ok": false,
+                "error": error,
+            })),
+        }
+    }
+
+    let statuses =
+        run_fleet_json_cmd_str(&["daemon-status", "--refresh", "--team-id", &team_id], 20).await?;
+
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "action": action,
+        "results": results,
+        "statuses": statuses,
+    }))
+}
+
+#[tauri::command]
 async fn start_filtered_stream(
     app: tauri::AppHandle,
     streams: tauri::State<'_, StreamRegistry>,
@@ -1831,6 +2098,9 @@ pub fn run() {
             get_workflows,
             get_task_summary,
             get_fleet_data,
+            get_team_snapshot,
+            set_team_enabled,
+            run_team_daemon_action,
             start_filtered_stream,
             stop_filtered_stream,
             get_project_config,

@@ -6,7 +6,15 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { cn } from "@/lib/utils";
-import type { FleetProject, StreamEvent, ProjectConfig, TaskInfo, CommitInfo, GlobalAoInfo } from "./types";
+import type {
+  FleetProject,
+  StreamEvent,
+  ProjectConfig,
+  TaskInfo,
+  CommitInfo,
+  GlobalAoInfo,
+  FleetTeamSnapshot,
+} from "./types";
 import { LogEventList, type LogGroupMode } from "./LogEventList";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -27,7 +35,12 @@ const TASK_COLORS: Record<string, string> = {
   on_hold: "#8c6b3d",
 };
 
-interface Props { projects: FleetProject[]; events: StreamEvent[]; globalAoInfo?: GlobalAoInfo | null; }
+interface Props {
+  projects: FleetProject[];
+  events: StreamEvent[];
+  globalAoInfo?: GlobalAoInfo | null;
+  onFleetRefresh: () => Promise<void>;
+}
 interface TeamBucket {
   teamId: string;
   teamSlug: string;
@@ -111,8 +124,9 @@ function selectProjectStreamEvents(events: StreamEvent[], streamFilter: StreamFi
     .slice(-PROJECT_DETAIL_MAX_EVENTS);
 }
 
-export function FleetOverview({ projects, events, globalAoInfo }: Props) {
+export function FleetOverview({ projects, events, globalAoInfo, onFleetRefresh }: Props) {
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const selected = useMemo(
     () => projects.find((project) => project.root === selectedRoot) ?? null,
     [projects, selectedRoot],
@@ -173,6 +187,10 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
       })
       .sort((left, right) => left.teamName.localeCompare(right.teamName));
   }, [projects]);
+  const selectedTeam = useMemo(
+    () => teamBuckets.find((team) => team.teamId === selectedTeamId) ?? null,
+    [selectedTeamId, teamBuckets],
+  );
 
   const totalAgents = projects.reduce((s, p) => s + (p.health?.active_agents || 0), 0);
   const totalPool = projects.reduce((s, p) => s + (p.health?.pool_size || 0), 0);
@@ -228,6 +246,17 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
     );
   }
 
+  if (selectedTeam) {
+    return (
+      <TeamDetail
+        team={selectedTeam}
+        onBack={() => setSelectedTeamId(null)}
+        onProjectClick={(root) => setSelectedRoot(root)}
+        onFleetRefresh={onFleetRefresh}
+      />
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto custom-scrollbar">
       <div className="max-w-[1600px] mx-auto p-6 space-y-8">
@@ -252,7 +281,7 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
               {attentionTeams.map(({ team, topProject, score }) => (
                 <button
                   key={`${team.teamId}:attention`}
-                  onClick={() => topProject && setSelectedRoot(topProject.project.root)}
+                  onClick={() => setSelectedTeamId(team.teamId)}
                   className="group relative flex flex-col p-5 text-left rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 transition-all duration-300"
                 >
                   <div className="flex justify-between items-start mb-4">
@@ -271,7 +300,7 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
                   </p>
                   <div className="pt-4 border-t border-white/5 flex items-center justify-between text-xs">
                     <span className="font-medium text-foreground">
-                      {topProject ? `Open ${topProject.project.name}` : "Inspect team"}
+                      {topProject ? `Open ${team.teamName}` : "Inspect team"}
                     </span>
                     <span className="text-muted-foreground">Open →</span>
                   </div>
@@ -325,6 +354,7 @@ export function FleetOverview({ projects, events, globalAoInfo }: Props) {
                     key={team.teamId}
                     team={team}
                     eventsByProjectRoot={eventsByProjectRoot}
+                    onTeamClick={() => setSelectedTeamId(team.teamId)}
                     onProjectClick={(root) => setSelectedRoot(root)}
                   />
                 ))}
@@ -395,19 +425,21 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 function TeamSection({
   team,
   eventsByProjectRoot,
+  onTeamClick,
   onProjectClick,
 }: {
   team: TeamBucket;
   eventsByProjectRoot: Map<string, StreamEvent[]>;
+  onTeamClick: () => void;
   onProjectClick: (root: string) => void;
 }) {
   return (
     <section className="px-6 py-5">
       <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
+        <button onClick={onTeamClick} className="text-left group">
           <div className="text-sm font-bold text-foreground">{team.teamName}</div>
-          <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">{team.teamSlug}</div>
-        </div>
+          <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 group-hover:text-primary/70">{team.teamSlug}</div>
+        </button>
         <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-wider">
           <span className="rounded border border-chart-1/30 bg-chart-1/10 px-2 py-1 text-chart-1">
             {team.runningCount} running
@@ -423,6 +455,12 @@ function TeamSection({
           <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground">
             {team.idleCount} idle
           </span>
+          <button
+            onClick={onTeamClick}
+            className="rounded border border-primary/20 bg-primary/10 px-2 py-1 text-primary transition-colors hover:bg-primary/15"
+          >
+            open team
+          </button>
         </div>
       </div>
 
@@ -437,6 +475,243 @@ function TeamSection({
         ))}
       </div>
     </section>
+  );
+}
+
+function TeamDetail({
+  team,
+  onBack,
+  onProjectClick,
+  onFleetRefresh,
+}: {
+  team: TeamBucket;
+  onBack: () => void;
+  onProjectClick: (root: string) => void;
+  onFleetRefresh: () => Promise<void>;
+}) {
+  const [snapshot, setSnapshot] = useState<FleetTeamSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionState, setActionState] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const loadSnapshot = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const value = await invoke<FleetTeamSnapshot>("get_team_snapshot", { teamId: team.teamId });
+      setSnapshot(value);
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadSnapshot();
+  }, [team.teamId]);
+
+  const runTeamAction = async (kind: "start" | "stop" | "pause" | "resume" | "enable" | "disable") => {
+    setActionState(kind);
+    setActionError(null);
+    try {
+      if (kind === "enable" || kind === "disable") {
+        await invoke("set_team_enabled", { teamId: team.teamId, enabled: kind === "enable" });
+      } else {
+        await invoke("run_team_daemon_action", { teamId: team.teamId, action: kind });
+      }
+      await onFleetRefresh();
+      await loadSnapshot();
+    } catch (invokeError) {
+      setActionError(String(invokeError));
+    } finally {
+      setActionState(null);
+    }
+  };
+
+  const placementByProjectId = useMemo(() => {
+    const map = new Map<string, FleetTeamSnapshot["placements"][number]>();
+    snapshot?.placements.forEach((placement) => map.set(placement.projectId, placement));
+    return map;
+  }, [snapshot]);
+
+  return (
+    <div className="h-full overflow-y-auto custom-scrollbar">
+      <div className="max-w-[1600px] mx-auto p-6 space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-3">
+            <button onClick={onBack} className="text-xs font-bold uppercase tracking-widest text-muted-foreground hover:text-primary">
+              ← Back To Company
+            </button>
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">{team.teamSlug}</div>
+              <h2 className="mt-2 text-3xl font-bold text-foreground">{team.teamName}</h2>
+              <p className="mt-3 max-w-3xl text-sm text-muted-foreground">
+                {snapshot?.team.mission || "No team mission has been recorded yet."}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              { label: "Enable Team", action: "enable" as const },
+              { label: "Disable Team", action: "disable" as const },
+              { label: "Start Enabled", action: "start" as const },
+              { label: "Stop Team", action: "stop" as const },
+              { label: "Pause Team", action: "pause" as const },
+              { label: "Resume Team", action: "resume" as const },
+            ].map((control) => (
+              <button
+                key={control.action}
+                onClick={() => void runTeamAction(control.action)}
+                disabled={actionState !== null}
+                className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-bold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+              >
+                {actionState === control.action ? "Working…" : control.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {actionError && (
+          <div className="rounded-2xl border border-chart-5/30 bg-chart-5/10 px-4 py-3 text-sm text-chart-5">
+            {actionError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <KPICard label="Projects" value={team.projects.length} />
+          <KPICard label="Enabled" value={team.enabledCount} />
+          <KPICard label="Running" value={team.runningCount} tone={team.runningCount > 0 ? "default" : "warning"} />
+          <KPICard label="Drift" value={team.driftCount} tone={team.driftCount > 0 ? "warning" : "default"} />
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
+          <section className="rounded-2xl border border-white/5 bg-card/20 overflow-hidden">
+            <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
+              <h3 className="text-sm font-bold text-foreground">Team Projects</h3>
+              <span className="text-xs text-muted-foreground">{team.projects.length} tracked</span>
+            </div>
+            <div className="divide-y divide-white/5">
+              {team.projects.map((project) => {
+                const placement = snapshot?.projects
+                  ? placementByProjectId.get(snapshot.projects.find((entry) => entry.root === project.root)?.id ?? "")
+                  : undefined;
+                return (
+                  <button
+                    key={project.root}
+                    onClick={() => onProjectClick(project.root)}
+                    className="grid w-full grid-cols-[1fr_120px_160px] gap-4 px-6 py-4 text-left transition-colors hover:bg-white/[0.03]"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-foreground">{project.name}</span>
+                        <span className={cn(
+                          "rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
+                          project.enabled ? "border-primary/20 bg-primary/10 text-primary" : "border-white/10 bg-white/5 text-muted-foreground",
+                        )}>
+                          {project.enabled ? "enabled" : "disabled"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground line-clamp-1">{project.root}</div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      <div className="font-bold uppercase tracking-widest text-[10px]">{project.health?.status ?? "offline"}</div>
+                      <div className="mt-1">{project.health?.queued_tasks ?? 0} queued</div>
+                    </div>
+                    <div className="text-right text-xs text-muted-foreground">
+                      <div>{placement?.hostName ?? "local host"}</div>
+                      <div className="mt-1">{placement?.hostStatus ?? "unplaced"}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <div className="space-y-6">
+            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">Schedules</h3>
+                <span className="text-xs text-muted-foreground">{snapshot?.schedules.length ?? 0}</span>
+              </div>
+              <div className="mt-4 space-y-3">
+                {loading && <div className="text-sm text-muted-foreground">Loading team state…</div>}
+                {error && <div className="text-sm text-chart-5">{error}</div>}
+                {!loading && !error && snapshot?.schedules.length === 0 && (
+                  <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+                    No schedules configured yet for this team.
+                  </div>
+                )}
+                {snapshot?.schedules.map((schedule) => (
+                  <div key={schedule.id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-foreground">{schedule.policyKind.replace(/_/g, " ")}</span>
+                      <span className={cn(
+                        "rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                        schedule.enabled ? "border-chart-1/30 bg-chart-1/10 text-chart-1" : "border-white/10 bg-white/5 text-muted-foreground",
+                      )}>
+                        {schedule.enabled ? "active" : "off"}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">{schedule.timezone}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">Host Placement</h3>
+                <span className="text-xs text-muted-foreground">{snapshot?.placements.length ?? 0}</span>
+              </div>
+              <div className="mt-4 space-y-3">
+                {!loading && !error && snapshot?.placements.length === 0 && (
+                  <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+                    No explicit host placements. This team currently resolves locally.
+                  </div>
+                )}
+                {snapshot?.placements.map((placement) => (
+                  <div key={`${placement.projectId}:${placement.hostId}`} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="text-sm font-bold text-foreground">{placement.hostName ?? placement.hostSlug ?? placement.hostId}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{placement.hostAddress ?? "No host address"}</div>
+                    <div className="mt-2 text-[11px] text-muted-foreground">
+                      {placement.assignmentSource} · {new Date(placement.assignedAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">Audit Trail</h3>
+                <span className="text-xs text-muted-foreground">{snapshot?.auditEvents.length ?? 0}</span>
+              </div>
+              <div className="mt-4 space-y-3">
+                {!loading && !error && snapshot?.auditEvents.length === 0 && (
+                  <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+                    No audit events recorded yet for this team.
+                  </div>
+                )}
+                {snapshot?.auditEvents.map((event) => (
+                  <div key={event.id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-bold text-foreground">{event.summary}</span>
+                      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{event.action}</span>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      {event.entityType} · {new Date(event.occurredAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

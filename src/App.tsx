@@ -121,18 +121,24 @@ function App() {
     }
   }, []);
 
+  const refreshProjects = useCallback(async () => {
+    const discovered = await invoke<Project[]>("discover_projects");
+    setProjects(discovered);
+    projectsRef.current = discovered;
+    discovered
+      .filter((project) => project.enabled)
+      .forEach((project) => {
+        invoke("start_stream", { projectRoot: project.root }).catch(console.error);
+      });
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
-    invoke<Project[]>("discover_projects")
-      .then((p) => {
+    refreshProjects()
+      .then(() => {
         if (cancelled) return;
-        setProjects(p);
-        projectsRef.current = p;
         setLoading(false);
-        p.filter((proj) => proj.enabled).forEach((proj) => {
-          invoke("start_stream", { projectRoot: proj.root }).catch(console.error);
-        });
       })
       .catch((error) => {
         console.error("discover projects error:", error);
@@ -158,7 +164,7 @@ function App() {
       pendingEventsRef.current = [];
       unlisten.then((fn) => fn());
     };
-  }, [flushPendingEvents]);
+  }, [flushPendingEvents, refreshProjects]);
 
   useEffect(() => {
     refreshGlobalAoInfo();
@@ -194,6 +200,11 @@ function App() {
       fleetFetchingRef.current = false;
     }
   }, []);
+
+  const refreshFleetState = useCallback(async () => {
+    await refreshProjects();
+    await refreshFleet();
+  }, [refreshFleet, refreshProjects]);
 
   useEffect(() => {
     if (projects.length > 0) {
@@ -262,7 +273,14 @@ function App() {
     }
 
     if (activeTab === "overview") {
-      return <FleetOverview projects={fleet} events={events} globalAoInfo={globalAoInfo} />;
+      return (
+        <FleetOverview
+          projects={fleet}
+          events={events}
+          globalAoInfo={globalAoInfo}
+          onFleetRefresh={refreshFleetState}
+        />
+      );
     }
     if (activeTab === "flow") {
       return <FleetFlow health={health} events={events} projects={projects} />;

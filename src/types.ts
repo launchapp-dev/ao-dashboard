@@ -79,6 +79,65 @@ export interface FleetData {
   projects: FleetProject[];
 }
 
+export interface FleetTeamSummary {
+  id: string;
+  slug: string;
+  name: string;
+  mission: string;
+  ownership: string;
+  businessPriority: number;
+}
+
+export interface FleetTeamProjectRecord {
+  id: string;
+  teamId: string;
+  slug: string;
+  root: string;
+  remoteUrl?: string | null;
+  enabled: boolean;
+}
+
+export interface FleetTeamScheduleRecord {
+  id: string;
+  teamId: string;
+  timezone: string;
+  policyKind: string;
+  windows: unknown;
+  enabled: boolean;
+}
+
+export interface FleetTeamPlacementRecord {
+  projectId: string;
+  hostId: string;
+  hostSlug?: string | null;
+  hostName?: string | null;
+  hostAddress?: string | null;
+  hostStatus?: string | null;
+  assignmentSource: string;
+  assignedAt: string;
+}
+
+export interface FleetAuditEvent {
+  id: string;
+  teamId?: string | null;
+  entityType: string;
+  entityId: string;
+  action: string;
+  actorType: string;
+  actorId?: string | null;
+  summary: string;
+  details: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export interface FleetTeamSnapshot {
+  team: FleetTeamSummary;
+  projects: FleetTeamProjectRecord[];
+  schedules: FleetTeamScheduleRecord[];
+  placements: FleetTeamPlacementRecord[];
+  auditEvents: FleetAuditEvent[];
+}
+
 export interface AgentConfig {
   name: string;
   model: string;
