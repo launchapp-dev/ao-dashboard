@@ -117,6 +117,14 @@ export interface FleetTeamPlacementRecord {
   assignedAt: string;
 }
 
+export interface FleetHostRecord {
+  id: string;
+  slug: string;
+  name: string;
+  address: string;
+  status: string;
+}
+
 export interface FleetAuditEvent {
   id: string;
   teamId?: string | null;
@@ -130,12 +138,71 @@ export interface FleetAuditEvent {
   occurredAt: string;
 }
 
+export interface FleetKnowledgeDocument {
+  id: string;
+  scope: string;
+  scopeRef?: string | null;
+  kind: string;
+  title: string;
+  summary: string;
+  body: string;
+  tags: string[];
+  updatedAt: string;
+}
+
+export interface FleetKnowledgeFact {
+  id: string;
+  scope: string;
+  scopeRef?: string | null;
+  kind: string;
+  statement: string;
+  confidence: number;
+  tags: string[];
+  observedAt: string;
+}
+
+export interface FleetTeamDaemonStatus {
+  projectId: string;
+  projectSlug: string;
+  projectRoot: string;
+  desiredState: string;
+  observedState: string;
+  checkedAt: string;
+  source: string;
+  details: Record<string, unknown>;
+}
+
+export interface FleetReconcileProjectResult {
+  teamId: string;
+  projectId: string;
+  projectRoot: string;
+  desiredState: string;
+  observedState?: string | null;
+  backlogCount: number;
+  scheduleIds: string[];
+  action?: string | null;
+  target: Record<string, unknown>;
+  commandResult?: Record<string, unknown> | null;
+}
+
+export interface FleetTeamReconcilePreview {
+  evaluatedAt: string;
+  apply: boolean;
+  teamId?: string | null;
+  results: FleetReconcileProjectResult[];
+}
+
 export interface FleetTeamSnapshot {
   team: FleetTeamSummary;
   projects: FleetTeamProjectRecord[];
   schedules: FleetTeamScheduleRecord[];
   placements: FleetTeamPlacementRecord[];
+  hosts: FleetHostRecord[];
+  daemonStatuses: FleetTeamDaemonStatus[];
+  reconcilePreview: FleetTeamReconcilePreview;
   auditEvents: FleetAuditEvent[];
+  knowledgeDocuments: FleetKnowledgeDocument[];
+  knowledgeFacts: FleetKnowledgeFact[];
 }
 
 export interface AgentConfig {

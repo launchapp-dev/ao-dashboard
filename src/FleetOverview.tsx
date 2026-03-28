@@ -494,6 +494,14 @@ function TeamDetail({
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [schedulePreset, setSchedulePreset] = useState("manual_only");
+  const [scheduleTimezone, setScheduleTimezone] = useState(
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  );
+  const [hostSelection, setHostSelection] = useState("local");
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteSummary, setNoteSummary] = useState("");
+  const [noteBody, setNoteBody] = useState("");
 
   const loadSnapshot = async () => {
     setLoading(true);
@@ -511,6 +519,16 @@ function TeamDetail({
   useEffect(() => {
     void loadSnapshot();
   }, [team.teamId]);
+
+  useEffect(() => {
+    const activeSchedule = snapshot?.schedules.find((schedule) => schedule.enabled) ?? snapshot?.schedules[0];
+    if (activeSchedule) {
+      setSchedulePreset(activeSchedule.policyKind);
+      setScheduleTimezone(activeSchedule.timezone);
+    }
+    const hostId = snapshot?.placements[0]?.hostId;
+    setHostSelection(hostId ?? "local");
+  }, [snapshot]);
 
   const runTeamAction = async (kind: "start" | "stop" | "pause" | "resume" | "enable" | "disable") => {
     setActionState(kind);
@@ -535,6 +553,82 @@ function TeamDetail({
     snapshot?.placements.forEach((placement) => map.set(placement.projectId, placement));
     return map;
   }, [snapshot]);
+
+  const daemonStatusByProjectId = useMemo(() => {
+    const map = new Map<string, FleetTeamSnapshot["daemonStatuses"][number]>();
+    snapshot?.daemonStatuses.forEach((status) => map.set(status.projectId, status));
+    return map;
+  }, [snapshot]);
+
+  const reconcileSummary = useMemo(() => {
+    const results = snapshot?.reconcilePreview.results ?? [];
+    return {
+      total: results.length,
+      actions: results.filter((result) => result.action).length,
+      running: results.filter((result) => result.desiredState === "running").length,
+      paused: results.filter((result) => result.desiredState === "paused").length,
+      stopped: results.filter((result) => result.desiredState === "stopped").length,
+    };
+  }, [snapshot]);
+
+  const runMutation = async (stateKey: string, operation: () => Promise<void>) => {
+    setActionState(stateKey);
+    setActionError(null);
+    try {
+      await operation();
+      await onFleetRefresh();
+      await loadSnapshot();
+    } catch (invokeError) {
+      setActionError(String(invokeError));
+    } finally {
+      setActionState(null);
+    }
+  };
+
+  const saveSchedule = async (enabled: boolean) => {
+    await runMutation(enabled ? "schedule-save" : "schedule-disable", async () => {
+      await invoke("save_team_schedule", {
+        teamId: team.teamId,
+        policyKind: schedulePreset,
+        timezone: scheduleTimezone,
+        enabled,
+      });
+    });
+  };
+
+  const reconcileTeam = async (apply: boolean) => {
+    await runMutation(apply ? "reconcile-apply" : "reconcile-preview", async () => {
+      await invoke("reconcile_team", { teamId: team.teamId, apply });
+    });
+  };
+
+  const saveHostPlacement = async () => {
+    await runMutation("host-save", async () => {
+      await invoke("set_team_host", {
+        teamId: team.teamId,
+        hostId: hostSelection === "local" ? null : hostSelection,
+      });
+    });
+  };
+
+  const saveKnowledgeNote = async () => {
+    if (!noteTitle.trim() || !noteSummary.trim() || !noteBody.trim()) {
+      setActionError("Title, summary, and note body are required.");
+      return;
+    }
+
+    await runMutation("knowledge-save", async () => {
+      await invoke("create_team_knowledge_note", {
+        teamId: team.teamId,
+        title: noteTitle,
+        summary: noteSummary,
+        body: noteBody,
+      });
+      setNoteTitle("");
+      setNoteSummary("");
+      setNoteBody("");
+    });
+  };
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar">
@@ -587,6 +681,13 @@ function TeamDetail({
           <KPICard label="Drift" value={team.driftCount} tone={team.driftCount > 0 ? "warning" : "default"} />
         </div>
 
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <KPICard label="Reconcile Actions" value={reconcileSummary.actions} tone={reconcileSummary.actions > 0 ? "warning" : "default"} />
+          <KPICard label="Desired Running" value={reconcileSummary.running} />
+          <KPICard label="Desired Paused" value={reconcileSummary.paused} />
+          <KPICard label="Desired Stopped" value={reconcileSummary.stopped} />
+        </div>
+
         <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
           <section className="rounded-2xl border border-white/5 bg-card/20 overflow-hidden">
             <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
@@ -597,6 +698,9 @@ function TeamDetail({
               {team.projects.map((project) => {
                 const placement = snapshot?.projects
                   ? placementByProjectId.get(snapshot.projects.find((entry) => entry.root === project.root)?.id ?? "")
+                  : undefined;
+                const status = snapshot?.projects
+                  ? daemonStatusByProjectId.get(snapshot.projects.find((entry) => entry.root === project.root)?.id ?? "")
                   : undefined;
                 return (
                   <button
@@ -617,8 +721,12 @@ function TeamDetail({
                       <div className="mt-1 text-xs text-muted-foreground line-clamp-1">{project.root}</div>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      <div className="font-bold uppercase tracking-widest text-[10px]">{project.health?.status ?? "offline"}</div>
-                      <div className="mt-1">{project.health?.queued_tasks ?? 0} queued</div>
+                      <div className="font-bold uppercase tracking-widest text-[10px]">
+                        {status?.observedState ?? project.health?.status ?? "offline"}
+                      </div>
+                      <div className="mt-1">
+                        target {status?.desiredState ?? (project.enabled ? "running" : "stopped")}
+                      </div>
                     </div>
                     <div className="text-right text-xs text-muted-foreground">
                       <div>{placement?.hostName ?? "local host"}</div>
@@ -633,10 +741,50 @@ function TeamDetail({
           <div className="space-y-6">
             <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-foreground">Schedules</h3>
+                <h3 className="text-sm font-bold text-foreground">Operating Policy</h3>
                 <span className="text-xs text-muted-foreground">{snapshot?.schedules.length ?? 0}</span>
               </div>
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3">
+                  <label className="space-y-2 text-xs text-muted-foreground">
+                    <span className="font-bold uppercase tracking-widest">Policy</span>
+                    <select
+                      value={schedulePreset}
+                      onChange={(event) => setSchedulePreset(event.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                    >
+                      <option value="manual_only">manual only</option>
+                      <option value="always_on">always on</option>
+                      <option value="business_hours">business hours</option>
+                      <option value="nightly">nightly</option>
+                      <option value="burst_on_backlog">burst on backlog</option>
+                    </select>
+                  </label>
+                  <label className="space-y-2 text-xs text-muted-foreground">
+                    <span className="font-bold uppercase tracking-widest">Timezone</span>
+                    <input
+                      value={scheduleTimezone}
+                      onChange={(event) => setScheduleTimezone(event.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                    />
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => void saveSchedule(true)}
+                      disabled={actionState !== null}
+                      className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {actionState === "schedule-save" ? "Saving…" : "Save Policy"}
+                    </button>
+                    <button
+                      onClick={() => void saveSchedule(false)}
+                      disabled={actionState !== null}
+                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-muted-foreground transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {actionState === "schedule-disable" ? "Disabling…" : "Disable Policy"}
+                    </button>
+                  </div>
+                </div>
                 {loading && <div className="text-sm text-muted-foreground">Loading team state…</div>}
                 {error && <div className="text-sm text-chart-5">{error}</div>}
                 {!loading && !error && snapshot?.schedules.length === 0 && (
@@ -656,6 +804,55 @@ function TeamDetail({
                       </span>
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">{schedule.timezone}</div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      {describeScheduleWindows(schedule.policyKind, schedule.windows)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">Reconcile</h3>
+                <span className="text-xs text-muted-foreground">{reconcileSummary.total}</span>
+              </div>
+              <div className="mt-4 space-y-4">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void reconcileTeam(false)}
+                    disabled={actionState !== null}
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-foreground transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {actionState === "reconcile-preview" ? "Previewing…" : "Preview Reconcile"}
+                  </button>
+                  <button
+                    onClick={() => void reconcileTeam(true)}
+                    disabled={actionState !== null}
+                    className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {actionState === "reconcile-apply" ? "Reconciling…" : "Reconcile Now"}
+                  </button>
+                </div>
+                <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+                  {reconcileSummary.actions > 0
+                    ? `${reconcileSummary.actions} project action${reconcileSummary.actions === 1 ? "" : "s"} would run for this team.`
+                    : "This team is already aligned with its current operating policy."}
+                </div>
+                {snapshot?.reconcilePreview.results.slice(0, 6).map((result) => (
+                  <div key={`${result.projectId}:${result.projectRoot}`} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-bold text-foreground">{result.projectRoot.split("/").pop()}</span>
+                      <span className={cn(
+                        "rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                        result.action ? "border-chart-4/30 bg-chart-4/10 text-chart-4" : "border-chart-1/30 bg-chart-1/10 text-chart-1",
+                      )}>
+                        {result.action ?? "aligned"}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      desired {result.desiredState} · observed {result.observedState ?? "unknown"}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -666,7 +863,31 @@ function TeamDetail({
                 <h3 className="text-sm font-bold text-foreground">Host Placement</h3>
                 <span className="text-xs text-muted-foreground">{snapshot?.placements.length ?? 0}</span>
               </div>
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3">
+                  <label className="space-y-2 text-xs text-muted-foreground">
+                    <span className="font-bold uppercase tracking-widest">Execution Host</span>
+                    <select
+                      value={hostSelection}
+                      onChange={(event) => setHostSelection(event.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                    >
+                      <option value="local">local host</option>
+                      {(snapshot?.hosts ?? []).map((host) => (
+                        <option key={host.id} value={host.id}>
+                          {host.name} · {host.address}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    onClick={() => void saveHostPlacement()}
+                    disabled={actionState !== null}
+                    className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {actionState === "host-save" ? "Saving…" : "Apply Host Placement"}
+                  </button>
+                </div>
                 {!loading && !error && snapshot?.placements.length === 0 && (
                   <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
                     No explicit host placements. This team currently resolves locally.
@@ -678,6 +899,67 @@ function TeamDetail({
                     <div className="mt-1 text-xs text-muted-foreground">{placement.hostAddress ?? "No host address"}</div>
                     <div className="mt-2 text-[11px] text-muted-foreground">
                       {placement.assignmentSource} · {new Date(placement.assignedAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-white/5 bg-card/20 p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-foreground">Knowledge</h3>
+                <span className="text-xs text-muted-foreground">
+                  {(snapshot?.knowledgeDocuments.length ?? 0) + (snapshot?.knowledgeFacts.length ?? 0)}
+                </span>
+              </div>
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3">
+                  <input
+                    value={noteTitle}
+                    onChange={(event) => setNoteTitle(event.target.value)}
+                    placeholder="Decision or note title"
+                    className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                  />
+                  <input
+                    value={noteSummary}
+                    onChange={(event) => setNoteSummary(event.target.value)}
+                    placeholder="One-line summary"
+                    className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                  />
+                  <textarea
+                    value={noteBody}
+                    onChange={(event) => setNoteBody(event.target.value)}
+                    placeholder="Capture policy, decisions, or operator notes for this team."
+                    rows={4}
+                    className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-foreground outline-none"
+                  />
+                  <button
+                    onClick={() => void saveKnowledgeNote()}
+                    disabled={actionState !== null}
+                    className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {actionState === "knowledge-save" ? "Saving…" : "Save Team Note"}
+                  </button>
+                </div>
+                {!loading && !error && snapshot?.knowledgeDocuments.length === 0 && snapshot?.knowledgeFacts.length === 0 && (
+                  <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+                    No knowledge has been recorded for this team yet.
+                  </div>
+                )}
+                {snapshot?.knowledgeDocuments.map((document) => (
+                  <div key={document.id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-bold text-foreground">{document.title}</span>
+                      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{document.kind}</span>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">{document.summary}</div>
+                  </div>
+                ))}
+                {snapshot?.knowledgeFacts.map((fact) => (
+                  <div key={fact.id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-foreground">{fact.statement}</span>
+                      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{fact.confidence}%</span>
                     </div>
                   </div>
                 ))}
@@ -713,6 +995,29 @@ function TeamDetail({
       </div>
     </div>
   );
+}
+
+function describeScheduleWindows(policyKind: string, windows: unknown) {
+  if (policyKind === "always_on") return "Runs continuously.";
+  if (policyKind === "manual_only") return "Founder-driven only. The fleet will not auto-run this team.";
+  if (policyKind === "burst_on_backlog") return "Paused when idle and resumes when backlog is present.";
+
+  if (!Array.isArray(windows) || windows.length === 0) {
+    return "No schedule windows recorded.";
+  }
+
+  const ranges = windows
+    .map((value) => {
+      if (!value || typeof value !== "object") return null;
+      const record = value as { start_hour?: number; end_hour?: number; weekdays?: number[] };
+      const weekdays = Array.isArray(record.weekdays)
+        ? record.weekdays.map((weekday) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekday] ?? weekday).join(", ")
+        : "Every day";
+      return `${weekdays} · ${record.start_hour ?? "?"}:00-${record.end_hour ?? "?"}:00`;
+    })
+    .filter(Boolean);
+
+  return ranges.join(" / ");
 }
 
 function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {

@@ -47,9 +47,14 @@ struct FleetProjectSnapshot {
 
 #[derive(Debug, Deserialize, Clone)]
 struct FleetDaemonStatusRecord {
+    pub project_id: String,
     pub project_slug: String,
     pub project_root: String,
+    pub desired_state: String,
     pub observed_state: String,
+    pub checked_at: String,
+    pub source: String,
+    pub details: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -101,6 +106,31 @@ struct FleetHostRecord {
     pub name: String,
     pub address: String,
     pub status: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetKnowledgeDocumentRecord {
+    pub id: String,
+    pub scope: String,
+    pub scope_ref: Option<String>,
+    pub kind: String,
+    pub title: String,
+    pub summary: String,
+    pub body: String,
+    pub tags: Vec<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetKnowledgeFactRecord {
+    pub id: String,
+    pub scope: String,
+    pub scope_ref: Option<String>,
+    pub kind: String,
+    pub statement: String,
+    pub confidence: u8,
+    pub tags: Vec<String>,
+    pub observed_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1348,11 +1378,42 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
 async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String> {
     let team = run_fleet_json_cmd_str(&["team-get", "--id", &team_id], 10).await?;
     let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
-    let schedules_value = run_fleet_json_cmd_str(&["schedule-list"], 10).await?;
+    let schedules_value =
+        run_fleet_json_cmd_str(&["schedule-list", "--team-id", &team_id], 10).await?;
     let audits_value =
         run_fleet_json_cmd_str(&["audit-list", "--team-id", &team_id, "--limit", "40"], 10).await?;
     let placements_value = run_fleet_json_cmd_str(&["project-host-list"], 10).await?;
     let hosts_value = run_fleet_json_cmd_str(&["host-list"], 10).await?;
+    let statuses_value =
+        run_fleet_json_cmd_str(&["daemon-status", "--refresh", "--team-id", &team_id], 20).await?;
+    let reconcile_value =
+        run_fleet_json_cmd_str(&["daemon-reconcile", "--team-id", &team_id], 20).await?;
+    let knowledge_documents_value = run_fleet_json_cmd_str(
+        &[
+            "knowledge-document-list",
+            "--scope",
+            "team",
+            "--scope-ref",
+            &team_id,
+            "--limit",
+            "12",
+        ],
+        10,
+    )
+    .await?;
+    let knowledge_facts_value = run_fleet_json_cmd_str(
+        &[
+            "knowledge-fact-list",
+            "--scope",
+            "team",
+            "--scope-ref",
+            &team_id,
+            "--limit",
+            "20",
+        ],
+        10,
+    )
+    .await?;
 
     let projects: Vec<FleetManagedProjectRecord> =
         serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
@@ -1363,7 +1424,13 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
     let placements: Vec<FleetProjectPlacementRecord> =
         serde_json::from_value(placements_value).map_err(|error| error.to_string())?;
     let hosts: Vec<FleetHostRecord> =
-        serde_json::from_value(hosts_value).map_err(|error| error.to_string())?;
+        serde_json::from_value(hosts_value.clone()).map_err(|error| error.to_string())?;
+    let statuses: Vec<FleetDaemonStatusRecord> =
+        serde_json::from_value(statuses_value).map_err(|error| error.to_string())?;
+    let knowledge_documents: Vec<FleetKnowledgeDocumentRecord> =
+        serde_json::from_value(knowledge_documents_value).map_err(|error| error.to_string())?;
+    let knowledge_facts: Vec<FleetKnowledgeFactRecord> =
+        serde_json::from_value(knowledge_facts_value).map_err(|error| error.to_string())?;
 
     let relevant_projects = projects
         .into_iter()
@@ -1374,7 +1441,8 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
         .map(|project| project.id.clone())
         .collect::<HashSet<_>>();
     let hosts_by_id = hosts
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|host| (host.id.clone(), host))
         .collect::<HashMap<_, _>>();
 
@@ -1443,6 +1511,89 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
         })
         .collect::<Vec<_>>();
 
+    let status_rows = statuses
+        .into_iter()
+        .map(|status| {
+            serde_json::json!({
+                "projectId": status.project_id,
+                "projectSlug": status.project_slug,
+                "projectRoot": status.project_root,
+                "desiredState": status.desired_state,
+                "observedState": status.observed_state,
+                "checkedAt": status.checked_at,
+                "source": status.source,
+                "details": status.details,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let host_rows = hosts
+        .into_iter()
+        .map(|host| {
+            serde_json::json!({
+                "id": host.id,
+                "slug": host.slug,
+                "name": host.name,
+                "address": host.address,
+                "status": host.status,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let knowledge_document_rows = knowledge_documents
+        .into_iter()
+        .map(|document| {
+            serde_json::json!({
+                "id": document.id,
+                "scope": document.scope,
+                "scopeRef": document.scope_ref,
+                "kind": document.kind,
+                "title": document.title,
+                "summary": document.summary,
+                "body": document.body,
+                "tags": document.tags,
+                "updatedAt": document.updated_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let reconcile_rows = reconcile_value["results"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|result| {
+            serde_json::json!({
+                "teamId": result["team_id"].as_str(),
+                "projectId": result["project_id"].as_str(),
+                "projectRoot": result["project_root"].as_str(),
+                "desiredState": result["desired_state"].as_str(),
+                "observedState": result["observed_state"].as_str(),
+                "backlogCount": result["backlog_count"].as_u64(),
+                "scheduleIds": result["schedule_ids"].as_array().cloned().unwrap_or_default(),
+                "action": result["action"].as_str(),
+                "target": result["target"].clone(),
+                "commandResult": result["command_result"].clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let knowledge_fact_rows = knowledge_facts
+        .into_iter()
+        .map(|fact| {
+            serde_json::json!({
+                "id": fact.id,
+                "scope": fact.scope,
+                "scopeRef": fact.scope_ref,
+                "kind": fact.kind,
+                "statement": fact.statement,
+                "confidence": fact.confidence,
+                "tags": fact.tags,
+                "observedAt": fact.observed_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
     Ok(serde_json::json!({
         "team": {
             "id": team["id"].as_str().unwrap_or(""),
@@ -1455,7 +1606,183 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
         "projects": project_rows,
         "schedules": schedule_rows,
         "placements": placement_rows,
+        "hosts": host_rows,
+        "daemonStatuses": status_rows,
+        "reconcilePreview": {
+            "evaluatedAt": reconcile_value["evaluated_at"].as_str().unwrap_or(""),
+            "apply": reconcile_value["apply"].as_bool().unwrap_or(false),
+            "teamId": reconcile_value["team_id"].as_str(),
+            "results": reconcile_rows,
+        },
         "auditEvents": audit_rows,
+        "knowledgeDocuments": knowledge_document_rows,
+        "knowledgeFacts": knowledge_fact_rows,
+    }))
+}
+
+fn preset_windows(policy_kind: &str) -> Vec<String> {
+    match policy_kind {
+        "business_hours" => ["0,9,17", "1,9,17", "2,9,17", "3,9,17", "4,9,17"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        "nightly" => vec!["0,22,6".to_string()],
+        _ => Vec::new(),
+    }
+}
+
+#[tauri::command]
+async fn save_team_schedule(
+    team_id: String,
+    policy_kind: String,
+    timezone: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let schedules_value =
+        run_fleet_json_cmd_str(&["schedule-list", "--team-id", &team_id], 10).await?;
+    let schedules: Vec<FleetScheduleRecord> =
+        serde_json::from_value(schedules_value).map_err(|error| error.to_string())?;
+    let windows = preset_windows(&policy_kind);
+    let existing = schedules.first().cloned();
+
+    let mut args = if let Some(schedule) = existing {
+        vec![
+            "schedule-update".to_string(),
+            "--id".to_string(),
+            schedule.id,
+            "--policy-kind".to_string(),
+            policy_kind,
+            "--timezone".to_string(),
+            timezone,
+            "--enabled".to_string(),
+            enabled.to_string(),
+        ]
+    } else {
+        vec![
+            "schedule-create".to_string(),
+            "--team-id".to_string(),
+            team_id.clone(),
+            "--policy-kind".to_string(),
+            policy_kind,
+            "--timezone".to_string(),
+            timezone,
+            "--enabled".to_string(),
+            enabled.to_string(),
+        ]
+    };
+
+    for window in windows {
+        args.push("--window".to_string());
+        args.push(window);
+    }
+
+    let schedule = run_fleet_json_cmd(&args, 10).await?;
+    let reconcile =
+        run_fleet_json_cmd_str(&["daemon-reconcile", "--team-id", &team_id], 10).await?;
+
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "schedule": schedule,
+        "reconcilePreview": reconcile,
+    }))
+}
+
+#[tauri::command]
+async fn reconcile_team(team_id: String, apply: bool) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "daemon-reconcile".to_string(),
+        "--team-id".to_string(),
+        team_id.clone(),
+    ];
+    if apply {
+        args.push("--apply".to_string());
+    }
+
+    let reconcile = run_fleet_json_cmd(&args, 20).await?;
+    let statuses =
+        run_fleet_json_cmd_str(&["daemon-status", "--refresh", "--team-id", &team_id], 20).await?;
+
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "reconcile": reconcile,
+        "statuses": statuses,
+    }))
+}
+
+#[tauri::command]
+async fn set_team_host(
+    team_id: String,
+    host_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
+    let projects: Vec<FleetManagedProjectRecord> =
+        serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
+    let relevant_projects = projects
+        .into_iter()
+        .filter(|project| project.team_id == team_id)
+        .collect::<Vec<_>>();
+
+    let mut results = Vec::new();
+    for project in relevant_projects {
+        let args = if let Some(value) = host_id.as_ref() {
+            vec![
+                "project-host-assign".to_string(),
+                "--project-id".to_string(),
+                project.id.clone(),
+                "--host-id".to_string(),
+                value.clone(),
+                "--assignment-source".to_string(),
+                "dashboard".to_string(),
+            ]
+        } else {
+            vec![
+                "project-host-clear".to_string(),
+                "--project-id".to_string(),
+                project.id.clone(),
+            ]
+        };
+        results.push(run_fleet_json_cmd(&args, 10).await?);
+    }
+
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "hostId": host_id,
+        "updatedProjects": results.len(),
+        "results": results,
+    }))
+}
+
+#[tauri::command]
+async fn create_team_knowledge_note(
+    team_id: String,
+    title: String,
+    summary: String,
+    body: String,
+) -> Result<serde_json::Value, String> {
+    let args = vec![
+        "knowledge-document-create".to_string(),
+        "--scope".to_string(),
+        "team".to_string(),
+        "--scope-ref".to_string(),
+        team_id.clone(),
+        "--kind".to_string(),
+        "policy_note".to_string(),
+        "--title".to_string(),
+        title,
+        "--summary".to_string(),
+        summary,
+        "--body".to_string(),
+        body,
+        "--source-kind".to_string(),
+        "manual_note".to_string(),
+        "--tag".to_string(),
+        "dashboard".to_string(),
+    ];
+
+    let document = run_fleet_json_cmd(&args, 10).await?;
+    Ok(serde_json::json!({
+        "teamId": team_id,
+        "document": document,
     }))
 }
 
@@ -2101,6 +2428,10 @@ pub fn run() {
             get_team_snapshot,
             set_team_enabled,
             run_team_daemon_action,
+            save_team_schedule,
+            reconcile_team,
+            set_team_host,
+            create_team_knowledge_note,
             start_filtered_stream,
             stop_filtered_stream,
             get_project_config,
