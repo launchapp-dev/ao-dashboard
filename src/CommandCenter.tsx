@@ -3,10 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import type {
+  DaemonHealth,
   AoCommandHelp,
   AoSessionExit,
   AoSessionOutput,
   AoSessionStarted,
+  FleetTeamSnapshot,
+  GlobalAoInfo,
+  Project,
+  StreamEvent,
 } from "./types";
 
 const MAX_SESSION_LINES = 1000;
@@ -111,7 +116,127 @@ function OutputEntry({ stream, line }: { stream: string; line: string }) {
   );
 }
 
-export function CommandCenter() {
+function CompactMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "success" | "warning" | "critical";
+}) {
+  const toneClass = tone === "success"
+    ? "text-chart-1"
+    : tone === "warning"
+      ? "text-chart-4"
+      : tone === "critical"
+        ? "text-chart-5"
+        : "text-foreground";
+
+  return (
+    <div className="rounded-2xl border border-white/5 bg-white/[0.03] px-4 py-3">
+      <div className={cn("text-lg font-bold", toneClass)}>{value}</div>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">{label}</div>
+    </div>
+  );
+}
+
+interface Props {
+  projects: Project[];
+  health: DaemonHealth[];
+  events: StreamEvent[];
+  globalAoInfo?: GlobalAoInfo | null;
+  onOpenOverview: () => void;
+}
+
+interface TeamCommandCard {
+  teamId: string;
+  teamName: string;
+  teamSlug: string;
+  mission: string;
+  projectCount: number;
+  enabledCount: number;
+  runningCount: number;
+  driftCount: number;
+  scheduleCount: number;
+  hostCount: number;
+  knowledgeCount: number;
+  latestAudit: string | null;
+  latestPolicy: string | null;
+  latestReason: string | null;
+  previewCount: number;
+}
+
+const TEAM_POLICY_PRESETS = [
+  { label: "Manual Only", policy: "manual_only" },
+  { label: "Always On", policy: "always_on" },
+  { label: "Business Hours", policy: "business_hours" },
+  { label: "Nightly", policy: "nightly" },
+  { label: "Burst On Backlog", policy: "burst_on_backlog" },
+] as const;
+
+function groupProjectsByTeam(projects: Project[]) {
+  const grouped = new Map<string, { teamId: string; teamName: string; teamSlug: string; projects: Project[] }>();
+
+  for (const project of projects) {
+    const existing = grouped.get(project.teamId);
+    if (existing) {
+      existing.projects.push(project);
+      continue;
+    }
+
+    grouped.set(project.teamId, {
+      teamId: project.teamId,
+      teamName: project.teamName,
+      teamSlug: project.teamSlug,
+      projects: [project],
+    });
+  }
+
+  return [...grouped.values()]
+    .map((entry) => ({
+      ...entry,
+      projects: [...entry.projects].sort((left, right) => left.name.localeCompare(right.name)),
+    }))
+    .sort((left, right) => left.teamName.localeCompare(right.teamName));
+}
+
+function formatPolicyName(policyKind: string | null | undefined) {
+  if (!policyKind) return "no policy";
+  return policyKind.replace(/_/g, " ");
+}
+
+function describeReconcileRow(row: FleetTeamSnapshot["reconcilePreview"]["results"][number]) {
+  if (!row.action) {
+    return "Already aligned with the current policy.";
+  }
+
+  const target = row.target as { resolution?: string; transport?: string; host_name?: string; host_slug?: string; host_address?: string; host_id?: string } | null;
+  const commandResult = row.commandResult as { message?: string; state?: string } | null;
+  const resolution = target?.resolution ? `resolution ${target.resolution}` : null;
+  const transport = target?.transport ? `transport ${target.transport}` : null;
+  const host = target?.host_name || target?.host_slug || target?.host_id || target?.host_address
+    ? `host ${target.host_name ?? target.host_slug ?? target.host_id ?? target.host_address}`
+    : null;
+
+  return [
+    `Would ${row.action} because desired ${row.desiredState} differs from observed ${row.observedState ?? "unknown"}.`,
+    resolution,
+    transport,
+    host,
+    commandResult?.message ?? null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function CommandCenter({
+  projects,
+  health,
+  events,
+  globalAoInfo,
+  onOpenOverview,
+}: Props) {
   const [path, setPath] = useState<string[]>([]);
   const [help, setHelp] = useState<AoCommandHelp | null>(null);
   const [loadingHelp, setLoadingHelp] = useState(true);
@@ -123,9 +248,183 @@ export function CommandCenter() {
   const [outputLines, setOutputLines] = useState<Array<{ stream: string; line: string }>>([]);
   const [stdinValue, setStdinValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [teamSnapshots, setTeamSnapshots] = useState<Record<string, FleetTeamSnapshot>>({});
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [teamAction, setTeamAction] = useState<string | null>(null);
   const helpCacheRef = useRef(new Map<string, AoCommandHelp>());
   const pendingOutputRef = useRef<Array<{ stream: string; line: string }>>([]);
   const outputFlushTimerRef = useRef<number | null>(null);
+
+  const teamBuckets = useMemo(() => groupProjectsByTeam(projects), [projects]);
+  const totalAgents = health.reduce((sum, item) => sum + item.active_agents, 0);
+  const totalQueue = health.reduce((sum, item) => sum + item.queued_tasks, 0);
+  const runningProjects = health.filter((item) => item.status === "running").length;
+  const driftProjects = teamBuckets.reduce((sum, team) => {
+    return sum + team.projects.filter((project) => {
+      const h = health.find((entry) => entry.root === project.root);
+      return project.enabled && h?.status !== "running";
+    }).length;
+  }, 0);
+  const configuredProviders = globalAoInfo?.providers.filter((provider) => provider.configured).length ?? 0;
+
+  const refreshTeamSnapshots = useCallback(async () => {
+    const uniqueTeamIds = [...new Set(projects.map((project) => project.teamId))];
+    if (uniqueTeamIds.length === 0) {
+      setTeamSnapshots({});
+      return;
+    }
+
+    setTeamLoading(true);
+    setTeamError(null);
+    try {
+      const loaded = await Promise.allSettled(
+        uniqueTeamIds.map(async (teamId) => {
+          const snapshot = await invoke<FleetTeamSnapshot>("get_team_snapshot", { teamId });
+          return [teamId, snapshot] as const;
+        }),
+      );
+
+      const next: Record<string, FleetTeamSnapshot> = {};
+      const errors: string[] = [];
+
+      for (const result of loaded) {
+        if (result.status === "fulfilled") {
+          const [teamId, snapshot] = result.value;
+          next[teamId] = snapshot;
+        } else {
+          errors.push(String(result.reason));
+        }
+      }
+
+      setTeamSnapshots(next);
+      if (errors.length > 0) {
+        setTeamError(errors.slice(0, 3).join(" | "));
+      }
+    } finally {
+      setTeamLoading(false);
+    }
+  }, [projects]);
+
+  useEffect(() => {
+    void refreshTeamSnapshots();
+  }, [refreshTeamSnapshots]);
+
+  const teamCards = useMemo<TeamCommandCard[]>(() => {
+    return teamBuckets.map((team) => {
+      const snapshot = teamSnapshots[team.teamId];
+      const daemonStatuses = snapshot?.daemonStatuses ?? [];
+      const scheduleCount = snapshot?.schedules.filter((schedule) => schedule.enabled).length ?? 0;
+      const hostCount = new Set(snapshot?.placements.map((placement) => placement.hostId) ?? []).size;
+      const knowledgeCount = (snapshot?.knowledgeDocuments.length ?? 0) + (snapshot?.knowledgeFacts.length ?? 0);
+      const driftCount = daemonStatuses.filter((status) => status.desiredState !== status.observedState).length;
+      const latestAudit = snapshot?.auditEvents[0]?.summary ?? null;
+      const latestPolicy = snapshot?.schedules.find((schedule) => schedule.enabled)?.policyKind ?? snapshot?.schedules[0]?.policyKind ?? null;
+      const latestReason = snapshot?.reconcilePreview.results[0]
+        ? describeReconcileRow(snapshot.reconcilePreview.results[0])
+        : null;
+
+      return {
+        teamId: team.teamId,
+        teamName: team.teamName,
+        teamSlug: team.teamSlug,
+        mission: snapshot?.team.mission ?? "No mission recorded yet.",
+        projectCount: team.projects.length,
+        enabledCount: team.projects.filter((project) => project.enabled).length,
+        runningCount: team.projects.filter((project) => {
+          const entry = health.find((item) => item.root === project.root);
+          return entry?.status === "running";
+        }).length,
+        driftCount,
+        scheduleCount,
+        hostCount,
+        knowledgeCount,
+        latestAudit,
+        latestPolicy,
+        latestReason,
+        previewCount: snapshot?.reconcilePreview.results.filter((row) => row.action).length ?? 0,
+      };
+    });
+  }, [health, teamBuckets, teamSnapshots]);
+
+  const hostSummary = useMemo(() => {
+    const hostMap = new Map<string, { id: string; name: string; address: string; status: string; teamNames: Set<string>; projectCount: number }>();
+
+    for (const snapshot of Object.values(teamSnapshots)) {
+      const teamName = snapshot.team.name;
+      for (const host of snapshot.hosts) {
+        const existing = hostMap.get(host.id);
+        if (existing) {
+          existing.teamNames.add(teamName);
+        } else {
+          hostMap.set(host.id, {
+            id: host.id,
+            name: host.name,
+            address: host.address,
+            status: host.status,
+            teamNames: new Set([teamName]),
+            projectCount: 0,
+          });
+        }
+      }
+
+      for (const placement of snapshot.placements) {
+        const host = hostMap.get(placement.hostId);
+        if (host) {
+          host.projectCount += 1;
+        }
+      }
+    }
+
+    return [...hostMap.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }, [teamSnapshots]);
+
+  const recentAuditEvents = useMemo(() => {
+    return Object.values(teamSnapshots)
+      .flatMap((snapshot) => snapshot.auditEvents.map((event) => ({
+        teamName: snapshot.team.name,
+        occurredAt: event.occurredAt,
+        summary: event.summary,
+        action: event.action,
+      })))
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+      .slice(0, 8);
+  }, [teamSnapshots]);
+
+  const runTeamPolicy = async (teamId: string, policyKind: string, enabled: boolean) => {
+    setTeamAction(`${teamId}:${policyKind}`);
+    setTeamError(null);
+    try {
+      const snapshot = teamSnapshots[teamId];
+      const timezone = snapshot?.schedules[0]?.timezone
+        ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+        ?? "UTC";
+      await invoke("save_team_schedule", {
+        teamId,
+        policyKind,
+        timezone,
+        enabled,
+      });
+      await refreshTeamSnapshots();
+    } catch (actionError) {
+      setTeamError(String(actionError));
+    } finally {
+      setTeamAction(null);
+    }
+  };
+
+  const runTeamReconcile = async (teamId: string, apply: boolean) => {
+    setTeamAction(`${teamId}:${apply ? "apply" : "preview"}`);
+    setTeamError(null);
+    try {
+      await invoke("reconcile_team", { teamId, apply });
+      await refreshTeamSnapshots();
+    } catch (actionError) {
+      setTeamError(String(actionError));
+    } finally {
+      setTeamAction(null);
+    }
+  };
 
   const flushPendingOutput = useCallback(() => {
     outputFlushTimerRef.current = null;
@@ -266,7 +565,191 @@ export function CommandCenter() {
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-3 p-3 sm:p-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+    <div className="flex h-full min-h-0 flex-col gap-3 p-3 sm:p-4">
+      <section className="rounded-[24px] border border-border/80 bg-card/45 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Founder Command Center</div>
+            <div className="text-lg font-bold text-foreground">Company board, policy controls, host roster, and the fleet CLI.</div>
+            <div className="max-w-3xl text-sm text-muted-foreground">
+              Use this tab to inspect the company as a whole, apply temporary team policies, reconcile teams, and keep the CLI explorer as a secondary surface.
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+              <span className="rounded border border-white/10 bg-white/5 px-2 py-1">
+                AO Sync {globalAoInfo?.sync.configured ? "online" : "local"}
+              </span>
+              <span className="rounded border border-white/10 bg-white/5 px-2 py-1">
+                Providers {configuredProviders}/{globalAoInfo?.providers.length ?? 0}
+              </span>
+              <span className="rounded border border-white/10 bg-white/5 px-2 py-1">
+                Live Events {events.length}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onOpenOverview}
+              className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/15"
+            >
+              Open Company Overview
+            </button>
+            <button
+              onClick={() => void refreshTeamSnapshots()}
+              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-foreground transition-colors hover:bg-white/10"
+            >
+              {teamLoading ? "Refreshing…" : "Refresh Company State"}
+            </button>
+          </div>
+        </div>
+
+        {teamError && (
+          <div className="mt-4 rounded-xl border border-chart-5/30 bg-chart-5/10 px-4 py-3 text-sm text-chart-5">
+            {teamError}
+          </div>
+        )}
+
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
+          <CompactMetric label="Teams" value={String(teamBuckets.length)} />
+          <CompactMetric label="Projects" value={String(projects.length)} />
+          <CompactMetric label="Running" value={`${runningProjects}/${projects.length}`} tone={runningProjects > 0 ? "success" : "warning"} />
+          <CompactMetric label="Drift" value={String(driftProjects)} tone={driftProjects > 0 ? "warning" : "default"} />
+          <CompactMetric label="Agents" value={String(totalAgents)} />
+          <CompactMetric label="Queue" value={String(totalQueue)} tone={totalQueue > 20 ? "warning" : "default"} />
+          <CompactMetric label="Events" value={String(events.length)} />
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-foreground">Teams Needing Attention</h3>
+              <span className="text-xs text-muted-foreground">{teamCards.filter((team) => team.driftCount > 0 || team.previewCount > 0 || team.scheduleCount === 0).length}</span>
+            </div>
+            <div className="grid gap-3">
+              {teamCards
+                .filter((team) => team.driftCount > 0 || team.previewCount > 0 || team.scheduleCount === 0)
+                .slice(0, 4)
+                .map((team) => (
+                  <div key={team.teamId} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-foreground">{team.teamName}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">{team.teamSlug}</div>
+                        <div className="mt-2 text-sm text-muted-foreground">{team.mission}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-wider">
+                        <span className="rounded border border-chart-4/30 bg-chart-4/10 px-2 py-1 text-chart-4">{team.driftCount} drift</span>
+                        <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground">{team.scheduleCount} policy</span>
+                        <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground">{team.hostCount} hosts</span>
+                        <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground">{team.knowledgeCount} notes</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {TEAM_POLICY_PRESETS.map((preset) => (
+                        <button
+                          key={`${team.teamId}:${preset.policy}`}
+                          onClick={() => void runTeamPolicy(team.teamId, preset.policy, true)}
+                          disabled={teamAction !== null}
+                          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-foreground transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {teamAction === `${team.teamId}:${preset.policy}` ? "Working…" : preset.label}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => void runTeamReconcile(team.teamId, false)}
+                        disabled={teamAction !== null}
+                        className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-1.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {teamAction === `${team.teamId}:preview` ? "Previewing…" : "Preview Reconcile"}
+                      </button>
+                      <button
+                        onClick={() => void runTeamReconcile(team.teamId, true)}
+                        disabled={teamAction !== null}
+                        className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-1.5 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {teamAction === `${team.teamId}:apply` ? "Reconciling…" : "Reconcile Now"}
+                      </button>
+                    </div>
+
+                    <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Policy</div>
+                        <div className="mt-1 font-medium text-foreground">{formatPolicyName(team.latestPolicy)}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Last Change</div>
+                        <div className="mt-1 font-medium text-foreground">{team.latestReason ?? "No reconcile action yet"}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Latest Audit</div>
+                        <div className="mt-1 font-medium text-foreground">{team.latestAudit ?? "No audit activity yet"}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Projects</div>
+                        <div className="mt-1 font-medium text-foreground">{team.enabledCount}/{team.projectCount} enabled</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-foreground">Hosts and Audit</h3>
+              <span className="text-xs text-muted-foreground">{hostSummary.length} hosts</span>
+            </div>
+
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+              <div className="mb-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Hosts</div>
+              <div className="space-y-2">
+                {hostSummary.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No explicit hosts are registered yet.</div>
+                ) : (
+                  hostSummary.slice(0, 6).map((host) => (
+                    <div key={host.id} className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-bold text-foreground">{host.name}</div>
+                          <div className="text-xs text-muted-foreground">{host.address}</div>
+                        </div>
+                        <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          {host.status}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-[11px] text-muted-foreground">
+                        {host.projectCount} project{host.projectCount === 1 ? "" : "s"} · {host.teamNames.size} team{host.teamNames.size === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+              <div className="mb-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Recent Audit</div>
+              <div className="space-y-2">
+                {recentAuditEvents.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No audit events loaded yet.</div>
+                ) : (
+                  recentAuditEvents.map((event) => (
+                    <div key={`${event.teamName}:${event.occurredAt}:${event.action}`} className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold text-foreground">{event.summary}</div>
+                        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">{event.teamName}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">{event.action}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid min-h-0 gap-3 xl:flex-1 xl:grid-cols-[340px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/40">
         <div className="border-b border-border px-4 py-3">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Fleet Command Center</div>
@@ -411,5 +894,6 @@ export function CommandCenter() {
         </div>
       </section>
     </div>
+  </div>
   );
 }

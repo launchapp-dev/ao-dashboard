@@ -71,7 +71,7 @@ const TAB_META: Array<{
     compactLabel: "FL",
     railLabel: "Fleet CLI",
     eyebrow: "Fleet Surface",
-    description: "Navigate and run company-level fleet commands.",
+    description: "Run founder ops, inspect company state, and use the fleet CLI.",
   },
 ];
 
@@ -291,7 +291,15 @@ function App() {
     if (activeTab === "tasks") {
       return <TaskWorkbench projects={projects} />;
     }
-    return <CommandCenter />;
+    return (
+      <CommandCenter
+        projects={projects}
+        health={health}
+        events={events}
+        globalAoInfo={globalAoInfo}
+        onOpenOverview={() => setActiveTab("overview")}
+      />
+    );
   };
 
   return (

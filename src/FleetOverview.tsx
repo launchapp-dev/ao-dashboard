@@ -35,6 +35,14 @@ const TASK_COLORS: Record<string, string> = {
   on_hold: "#8c6b3d",
 };
 
+const TEAM_POLICY_PRESETS = [
+  { label: "Manual Only", policy: "manual_only" },
+  { label: "Always On", policy: "always_on" },
+  { label: "Business Hours", policy: "business_hours" },
+  { label: "Nightly", policy: "nightly" },
+  { label: "Burst On Backlog", policy: "burst_on_backlog" },
+] as const;
+
 interface Props {
   projects: FleetProject[];
   events: StreamEvent[];
@@ -596,6 +604,18 @@ function TeamDetail({
     });
   };
 
+  const savePolicyPreset = async (policyKind: string, enabled: boolean) => {
+    setSchedulePreset(policyKind);
+    await runMutation(`policy-${policyKind}`, async () => {
+      await invoke("save_team_schedule", {
+        teamId: team.teamId,
+        policyKind,
+        timezone: scheduleTimezone,
+        enabled,
+      });
+    });
+  };
+
   const reconcileTeam = async (apply: boolean) => {
     await runMutation(apply ? "reconcile-apply" : "reconcile-preview", async () => {
       await invoke("reconcile_team", { teamId: team.teamId, apply });
@@ -745,6 +765,25 @@ function TeamDetail({
                 <span className="text-xs text-muted-foreground">{snapshot?.schedules.length ?? 0}</span>
               </div>
               <div className="mt-4 space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {TEAM_POLICY_PRESETS.map((preset) => (
+                    <button
+                      key={preset.policy}
+                      onClick={() => void savePolicyPreset(preset.policy, true)}
+                      disabled={actionState !== null}
+                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-foreground transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {actionState === `policy-${preset.policy}` ? "Working…" : preset.label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => void savePolicyPreset("manual_only", false)}
+                    disabled={actionState !== null}
+                    className="rounded-lg border border-chart-5/30 bg-chart-5/10 px-3 py-1.5 text-[11px] font-semibold text-chart-5 transition-colors hover:bg-chart-5/15 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {actionState === "policy-manual_only" ? "Freezing…" : "Freeze Team"}
+                  </button>
+                </div>
                 <div className="grid gap-3">
                   <label className="space-y-2 text-xs text-muted-foreground">
                     <span className="font-bold uppercase tracking-widest">Policy</span>
@@ -853,6 +892,9 @@ function TeamDetail({
                     <div className="mt-2 text-xs text-muted-foreground">
                       desired {result.desiredState} · observed {result.observedState ?? "unknown"}
                     </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      {describeTeamReconcileResult(result)}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -902,6 +944,28 @@ function TeamDetail({
                     </div>
                   </div>
                 ))}
+              </div>
+              <div className="mt-5 rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Host Roster</div>
+                <div className="mt-3 space-y-2">
+                  {(snapshot?.hosts ?? []).length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No hosts registered for this team yet.</div>
+                  ) : (
+                    snapshot?.hosts.map((host) => (
+                      <div key={host.id} className="rounded-xl border border-white/5 bg-black/10 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-bold text-foreground">{host.name}</div>
+                            <div className="text-xs text-muted-foreground">{host.address}</div>
+                          </div>
+                          <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            {host.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </section>
 
@@ -1018,6 +1082,33 @@ function describeScheduleWindows(policyKind: string, windows: unknown) {
     .filter(Boolean);
 
   return ranges.join(" / ");
+}
+
+function describeTeamReconcileResult(result: FleetTeamSnapshot["reconcilePreview"]["results"][number]) {
+  if (!result.action) {
+    return "Already aligned with the current policy.";
+  }
+
+  const target = result.target as {
+    resolution?: string;
+    transport?: string;
+    host_name?: string;
+    host_slug?: string;
+    host_address?: string;
+    host_id?: string;
+  } | null;
+  const commandResult = result.commandResult as { message?: string } | null;
+  const details = [
+    `Would ${result.action} because desired ${result.desiredState} differs from observed ${result.observedState ?? "unknown"}.`,
+    target?.resolution ? `resolution ${target.resolution}` : null,
+    target?.transport ? `transport ${target.transport}` : null,
+    target?.host_name || target?.host_slug || target?.host_address || target?.host_id
+      ? `host ${target.host_name ?? target.host_slug ?? target.host_address ?? target.host_id}`
+      : null,
+    commandResult?.message ?? null,
+  ];
+
+  return details.filter(Boolean).join(" ");
 }
 
 function GlobalAoPanel({ info }: { info: GlobalAoInfo }) {
