@@ -68,6 +68,50 @@ type StreamFilter =
 type ActiveRunsStreamFilter = Extract<StreamFilter, { type: "active-runs" }>;
 const PROJECT_DETAIL_MAX_EVENTS = 4000;
 
+function renderReconcileTarget(target: Record<string, unknown>) {
+  const resolution = typeof target.resolution === "string" ? target.resolution : null;
+  const transport = typeof target.transport === "string" ? target.transport : null;
+  const host = [
+    typeof target.host_name === "string" ? target.host_name : null,
+    typeof target.host_slug === "string" ? target.host_slug : null,
+    typeof target.host_address === "string" ? target.host_address : null,
+    typeof target.host_id === "string" ? target.host_id : null,
+  ].find(Boolean);
+
+  if (!resolution && !transport && !host) return null;
+
+  return (
+    <div className="mt-3 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Resolution</div>
+        <div className="mt-1 text-foreground">{resolution ?? "n/a"}</div>
+      </div>
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Transport</div>
+        <div className="mt-1 text-foreground">{transport ?? "n/a"}</div>
+      </div>
+      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Target Host</div>
+        <div className="mt-1 text-foreground">{host ?? "local"}</div>
+      </div>
+    </div>
+  );
+}
+
+function renderCommandResult(commandResult?: Record<string, unknown> | null) {
+  if (!commandResult || Object.keys(commandResult).length === 0) return null;
+
+  const state = typeof commandResult.state === "string" ? commandResult.state : null;
+  const message = typeof commandResult.message === "string" ? commandResult.message : null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/5 bg-black/10 px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Command Result</div>
+      <div className="mt-1 text-foreground">{message ?? state ?? "No command payload returned."}</div>
+    </div>
+  );
+}
+
 function getEventRunId(event: StreamEvent) {
   return typeof event.run_id === "string"
     ? event.run_id
@@ -1095,50 +1139,6 @@ function describeScheduleWindows(policyKind: string, windows: unknown) {
     .filter(Boolean);
 
   return ranges.join(" / ");
-}
-
-function renderReconcileTarget(target: Record<string, unknown>) {
-  const resolution = typeof target.resolution === "string" ? target.resolution : null;
-  const transport = typeof target.transport === "string" ? target.transport : null;
-  const host = [
-    typeof target.host_name === "string" ? target.host_name : null,
-    typeof target.host_slug === "string" ? target.host_slug : null,
-    typeof target.host_address === "string" ? target.host_address : null,
-    typeof target.host_id === "string" ? target.host_id : null,
-  ].find(Boolean);
-
-  if (!resolution && !transport && !host) return null;
-
-  return (
-    <div className="mt-3 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
-      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Resolution</div>
-        <div className="mt-1 text-foreground">{resolution ?? "n/a"}</div>
-      </div>
-      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Transport</div>
-        <div className="mt-1 text-foreground">{transport ?? "n/a"}</div>
-      </div>
-      <div className="rounded-lg border border-white/5 bg-black/10 px-3 py-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Target Host</div>
-        <div className="mt-1 text-foreground">{host ?? "local"}</div>
-      </div>
-    </div>
-  );
-}
-
-function renderCommandResult(commandResult?: Record<string, unknown> | null) {
-  if (!commandResult || Object.keys(commandResult).length === 0) return null;
-
-  const state = typeof commandResult.state === "string" ? commandResult.state : null;
-  const message = typeof commandResult.message === "string" ? commandResult.message : null;
-
-  return (
-    <div className="mt-3 rounded-lg border border-white/5 bg-black/10 px-3 py-2 text-[11px] text-muted-foreground">
-      <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">Command Result</div>
-      <div className="mt-1 text-foreground">{message ?? state ?? "No command payload returned."}</div>
-    </div>
-  );
 }
 
 function describeTeamReconcileResult(result: FleetTeamSnapshot["reconcilePreview"]["results"][number]) {
