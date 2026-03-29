@@ -589,7 +589,7 @@ export function CommandCenter({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-3 sm:p-4">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 sm:p-4 custom-scrollbar">
       <section className="rounded-[24px] border border-border/80 bg-card/45 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2">

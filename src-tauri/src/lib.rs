@@ -1581,33 +1581,40 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
         .collect::<HashMap<_, _>>();
     let status_by_root = &status_by_root_map;
 
-    let mut fleet = overview
-        .teams
-        .into_iter()
-        .flat_map(|team| {
-            let team_id = team.team.id;
-            let team_slug = team.team.slug;
-            let team_name = team.team.name;
+    let mut fleet = Vec::new();
 
-            team.projects.into_iter().map(move |project| {
-                let health = status_by_root
-                    .get(&project.ao_project_root)
-                    .map(|status| parse_fleet_health_value(status));
+    for team in overview.teams {
+        let team_id = team.team.id;
+        let team_slug = team.team.slug;
+        let team_name = team.team.name;
 
-                serde_json::json!({
-                    "name": project.slug,
-                    "root": project.ao_project_root,
-                    "enabled": project.enabled,
-                    "teamId": team_id,
-                    "teamSlug": team_slug,
-                    "teamName": team_name,
-                    "health": health,
-                    "workflows": [],
-                    "tasks": serde_json::Value::Null,
-                })
-            })
-        })
-        .collect::<Vec<_>>();
+        for project in team.projects {
+            let project_root = project.ao_project_root.clone();
+            let health = status_by_root.get(&project_root).map(parse_fleet_health_value);
+            let workflows = if project.enabled {
+                get_workflows(project_root.clone()).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let tasks = if project.enabled {
+                get_task_summary(project_root.clone()).await.ok()
+            } else {
+                None
+            };
+
+            fleet.push(serde_json::json!({
+                "name": project.slug,
+                "root": project_root,
+                "enabled": project.enabled,
+                "teamId": team_id,
+                "teamSlug": team_slug,
+                "teamName": team_name,
+                "health": health,
+                "workflows": workflows,
+                "tasks": tasks,
+            }));
+        }
+    }
 
     fleet.sort_by(|left, right| {
         left["teamSlug"]
