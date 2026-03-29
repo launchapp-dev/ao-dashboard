@@ -46,6 +46,25 @@ struct FleetProjectSnapshot {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+struct FleetOverviewProjectRecord {
+    pub slug: String,
+    pub ao_project_root: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetOverviewTeamRecord {
+    pub team: FleetTeamRecord,
+    pub projects: Vec<FleetOverviewProjectRecord>,
+    pub daemon_statuses: Vec<FleetDaemonStatusRecord>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetOverviewResponse {
+    pub teams: Vec<FleetOverviewTeamRecord>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 struct FleetDaemonStatusRecord {
     pub project_id: String,
     pub project_slug: String,
@@ -472,34 +491,31 @@ fn summarize_log_file(path: &Path, name: &str) -> AoLogInfo {
     }
 }
 
-async fn load_fleet_projects() -> Result<Vec<FleetProjectSnapshot>, String> {
-    let project_data = run_fleet_json_cmd_str(&["project-list"], 15).await?;
-    let team_data = run_fleet_json_cmd_str(&["team-list"], 15).await?;
-    let mut projects: Vec<FleetProjectRecord> =
-        serde_json::from_value(project_data).map_err(|error| error.to_string())?;
-    let teams: Vec<FleetTeamRecord> =
-        serde_json::from_value(team_data).map_err(|error| error.to_string())?;
-    let team_map = teams
-        .into_iter()
-        .map(|team| (team.id.clone(), team))
-        .collect::<HashMap<_, _>>();
+async fn load_fleet_overview() -> Result<FleetOverviewResponse, String> {
+    let overview_value = run_fleet_json_cmd_str(&["fleet-overview"], 20).await?;
+    serde_json::from_value(overview_value).map_err(|error| error.to_string())
+}
 
-    let mut snapshots = projects
-        .drain(..)
-        .map(|project| {
-            let team = team_map.get(&project.team_id);
-            FleetProjectSnapshot {
-                team_id: project.team_id.clone(),
-                team_slug: team
-                    .map(|record| record.slug.clone())
-                    .unwrap_or_else(|| "unassigned".to_string()),
-                team_name: team
-                    .map(|record| record.name.clone())
-                    .unwrap_or_else(|| "Unassigned".to_string()),
-                slug: project.slug,
-                ao_project_root: project.ao_project_root,
-                enabled: project.enabled,
-            }
+async fn load_fleet_projects() -> Result<Vec<FleetProjectSnapshot>, String> {
+    let overview = load_fleet_overview().await?;
+    let mut snapshots = overview
+        .teams
+        .into_iter()
+        .flat_map(|team| {
+            let team_id = team.team.id;
+            let team_slug = team.team.slug;
+            let team_name = team.team.name;
+
+            team.projects
+                .into_iter()
+                .map(move |project| FleetProjectSnapshot {
+                    team_id: team_id.clone(),
+                    team_slug: team_slug.clone(),
+                    team_name: team_name.clone(),
+                    slug: project.slug,
+                    ao_project_root: project.ao_project_root,
+                    enabled: project.enabled,
+                })
         })
         .collect::<Vec<_>>();
     snapshots.sort_by(|left, right| {
@@ -1341,35 +1357,56 @@ async fn get_task_summary(project_root: String) -> Result<TaskSummary, String> {
 
 #[tauri::command]
 async fn get_fleet_data() -> Result<serde_json::Value, String> {
-    let projects = load_fleet_projects().await?;
-    let statuses_value = run_fleet_json_cmd_str(&["daemon-status", "--refresh"], 30).await?;
-    let statuses: Vec<FleetDaemonStatusRecord> =
-        serde_json::from_value(statuses_value).map_err(|error| error.to_string())?;
-    let status_by_root = statuses
-        .into_iter()
+    let overview = load_fleet_overview().await?;
+    let status_by_root_map = overview
+        .teams
+        .iter()
+        .flat_map(|team| team.daemon_statuses.iter())
+        .cloned()
         .map(|status| (status.project_root.clone(), status))
         .collect::<HashMap<_, _>>();
+    let status_by_root = &status_by_root_map;
 
-    let fleet = projects
+    let mut fleet = overview
+        .teams
         .into_iter()
-        .map(|project| {
-            let health = status_by_root
-                .get(&project.ao_project_root)
-                .map(parse_fleet_health_value);
+        .flat_map(|team| {
+            let team_id = team.team.id;
+            let team_slug = team.team.slug;
+            let team_name = team.team.name;
 
-            serde_json::json!({
-                "name": project.slug,
-                "root": project.ao_project_root,
-                "enabled": project.enabled,
-                "teamId": project.team_id,
-                "teamSlug": project.team_slug,
-                "teamName": project.team_name,
-                "health": health,
-                "workflows": [],
-                "tasks": serde_json::Value::Null,
+            team.projects.into_iter().map(move |project| {
+                let health = status_by_root
+                    .get(&project.ao_project_root)
+                    .map(|status| parse_fleet_health_value(status));
+
+                serde_json::json!({
+                    "name": project.slug,
+                    "root": project.ao_project_root,
+                    "enabled": project.enabled,
+                    "teamId": team_id,
+                    "teamSlug": team_slug,
+                    "teamName": team_name,
+                    "health": health,
+                    "workflows": [],
+                    "tasks": serde_json::Value::Null,
+                })
             })
         })
         .collect::<Vec<_>>();
+
+    fleet.sort_by(|left, right| {
+        left["teamSlug"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["teamSlug"].as_str().unwrap_or_default())
+            .then(
+                left["root"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["root"].as_str().unwrap_or_default()),
+            )
+    });
 
     Ok(serde_json::json!({ "projects": fleet }))
 }
@@ -1622,23 +1659,7 @@ async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String>
 
 #[tauri::command]
 async fn get_founder_overview() -> Result<serde_json::Value, String> {
-    let teams_value = run_fleet_json_cmd_str(&["team-list"], 10).await?;
-    let teams = teams_value
-        .as_array()
-        .cloned()
-        .ok_or_else(|| "team-list did not return an array".to_string())?;
-
-    let mut snapshots = Vec::with_capacity(teams.len());
-    for team in teams {
-        let team_id = team["id"]
-            .as_str()
-            .ok_or_else(|| "team-list entry missing id".to_string())?;
-        snapshots.push(get_team_snapshot(team_id.to_string()).await?);
-    }
-
-    Ok(serde_json::json!({
-        "teams": snapshots,
-    }))
+    run_fleet_json_cmd_str(&["fleet-overview"], 20).await
 }
 
 fn preset_windows(policy_kind: &str) -> Vec<String> {
