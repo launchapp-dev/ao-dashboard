@@ -1362,10 +1362,18 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   const [levelFilter, setLevelFilter] = useState("all");
   const [textFilter, setTextFilter] = useState("");
   const [groupMode, setGroupMode] = useState<LogGroupMode>("conversation");
-  const [viewMode, setViewMode] = useState<"stream" | "config" | "tasks" | "commits">("stream");
+  const [viewMode, setViewMode] = useState<"stream" | "config" | "tasks" | "commits">(
+    events.length > 0 || p.workflows.length > 0 ? "stream" : "config"
+  );
   const [config, setConfig] = useState<ProjectConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [taskList, setTaskList] = useState<TaskInfo[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
   const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const [commitsLoading, setCommitsLoading] = useState(false);
+  const [commitsError, setCommitsError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -1395,9 +1403,54 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
   }, [streamFilter]);
 
   useEffect(() => {
-    invoke<ProjectConfig>("get_project_config", { projectRoot: p.root }).then(setConfig).catch(() => {});
-    invoke<TaskInfo[]>("get_task_list", { projectRoot: p.root }).then(setTaskList).catch(() => {});
-    invoke<CommitInfo[]>("get_recent_commits", { projectRoot: p.root }).then(setCommits).catch(() => {});
+    let cancelled = false;
+    setViewMode(events.length > 0 || p.workflows.length > 0 ? "stream" : "config");
+    setConfig(null);
+    setTaskList([]);
+    setCommits([]);
+    setConfigError(null);
+    setTasksError(null);
+    setCommitsError(null);
+    setConfigLoading(true);
+    setTasksLoading(true);
+    setCommitsLoading(true);
+
+    invoke<ProjectConfig>("get_project_config", { projectRoot: p.root })
+      .then((value) => {
+        if (!cancelled) setConfig(value);
+      })
+      .catch((error) => {
+        if (!cancelled) setConfigError(String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setConfigLoading(false);
+      });
+
+    invoke<TaskInfo[]>("get_task_list", { projectRoot: p.root })
+      .then((value) => {
+        if (!cancelled) setTaskList(value);
+      })
+      .catch((error) => {
+        if (!cancelled) setTasksError(String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setTasksLoading(false);
+      });
+
+    invoke<CommitInfo[]>("get_recent_commits", { projectRoot: p.root })
+      .then((value) => {
+        if (!cancelled) setCommits(value);
+      })
+      .catch((error) => {
+        if (!cancelled) setCommitsError(String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setCommitsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [p.root]);
 
   useEffect(() => {
@@ -1519,9 +1572,13 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
       </header>
 
       <main className="flex-1 min-h-0 overflow-hidden">
-        {viewMode === "config" && config ? <ConfigView config={config} /> :
-         viewMode === "tasks" ? <TasksView tasks={taskList} /> :
-         viewMode === "commits" ? <CommitsView commits={commits} /> :
+        {viewMode === "config" ? (
+          <ConfigPanel config={config} loading={configLoading} error={configError} />
+        ) : viewMode === "tasks" ? (
+          <TasksPanel tasks={taskList} loading={tasksLoading} error={tasksError} />
+        ) : viewMode === "commits" ? (
+          <CommitsPanel commits={commits} loading={commitsLoading} error={commitsError} />
+        ) :
          <div className="h-full flex">
            <aside className="w-64 border-r border-white/5 bg-card/10 overflow-y-auto p-4 space-y-6">
              <SidebarSection title="General">
@@ -1601,6 +1658,111 @@ function ProjectDetail({ project: p, events, onBack }: { project: FleetProject; 
         }
       </main>
     </div>
+  );
+}
+
+function DetailState({
+  loading,
+  error,
+  empty,
+  emptyLabel,
+  children,
+}: {
+  loading: boolean;
+  error: string | null;
+  empty: boolean;
+  emptyLabel: string;
+  children: React.ReactNode;
+}) {
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
+        Loading project data...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="max-w-xl rounded-xl border border-chart-5/20 bg-chart-5/10 px-4 py-3 text-sm text-chart-5">
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  if (empty) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
+        {emptyLabel}
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function ConfigPanel({
+  config,
+  loading,
+  error,
+}: {
+  config: ProjectConfig | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <DetailState
+      loading={loading}
+      error={error}
+      empty={!config}
+      emptyLabel="No project configuration is available for this repo yet."
+    >
+      {config ? <ConfigView config={config} /> : null}
+    </DetailState>
+  );
+}
+
+function TasksPanel({
+  tasks,
+  loading,
+  error,
+}: {
+  tasks: TaskInfo[];
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <DetailState
+      loading={loading}
+      error={error}
+      empty={tasks.length === 0}
+      emptyLabel="No AO tasks are available for this repo."
+    >
+      <TasksView tasks={tasks} />
+    </DetailState>
+  );
+}
+
+function CommitsPanel({
+  commits,
+  loading,
+  error,
+}: {
+  commits: CommitInfo[];
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <DetailState
+      loading={loading}
+      error={error}
+      empty={commits.length === 0}
+      emptyLabel="No recent commits were found for this repo."
+    >
+      <CommitsView commits={commits} />
+    </DetailState>
   );
 }
 
