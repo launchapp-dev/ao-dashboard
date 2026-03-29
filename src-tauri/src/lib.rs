@@ -531,7 +531,9 @@ async fn load_fleet_overview() -> Result<FleetOverviewResponse, String> {
     serde_json::from_value(overview_value).map_err(|error| error.to_string())
 }
 
-async fn load_founder_overview(team_id: Option<&str>) -> Result<FleetFounderOverviewResponse, String> {
+async fn load_founder_overview(
+    team_id: Option<&str>,
+) -> Result<FleetFounderOverviewResponse, String> {
     let mut args = vec!["founder-overview"];
     if let Some(team_id) = team_id {
         args.push("--team-id");
@@ -580,7 +582,10 @@ fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
     {
         "offline".to_string()
     } else {
-        status.observed_state.clone().unwrap_or_else(|| "offline".to_string())
+        status
+            .observed_state
+            .clone()
+            .unwrap_or_else(|| "offline".to_string())
     };
 
     DaemonHealth {
@@ -596,7 +601,10 @@ fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
     }
 }
 
-fn derive_reconcile_action(desired_state: &str, observed_state: Option<&str>) -> Option<&'static str> {
+fn derive_reconcile_action(
+    desired_state: &str,
+    observed_state: Option<&str>,
+) -> Option<&'static str> {
     match (desired_state, observed_state.unwrap_or("unknown")) {
         ("running", "running") | ("paused", "paused") | ("stopped", "stopped") => None,
         ("running", "paused") => Some("resume"),
@@ -610,7 +618,11 @@ fn derive_reconcile_action(desired_state: &str, observed_state: Option<&str>) ->
 
 fn founder_team_to_snapshot_value(team: FleetFounderTeamRecord) -> serde_json::Value {
     let reconcile_preview = &team.fleet.reconcile_preview;
-    let backlog_count = team.fleet.summary.backlog_count.max(reconcile_preview.backlog_count);
+    let backlog_count = team
+        .fleet
+        .summary
+        .backlog_count
+        .max(reconcile_preview.backlog_count);
     let reconcile_rows = team
         .daemon_statuses
         .iter()
