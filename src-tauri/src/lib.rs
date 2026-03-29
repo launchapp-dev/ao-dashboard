@@ -105,10 +105,10 @@ struct FleetDaemonStatusRecord {
     pub project_slug: String,
     pub project_root: String,
     pub desired_state: String,
-    pub observed_state: String,
-    pub checked_at: String,
-    pub source: String,
-    pub details: serde_json::Value,
+    pub observed_state: Option<String>,
+    pub checked_at: Option<String>,
+    pub source: Option<String>,
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -572,10 +572,15 @@ async fn load_fleet_projects() -> Result<Vec<FleetProjectSnapshot>, String> {
 }
 
 fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
-    let fleet_status = if status.observed_state.trim().is_empty() {
+    let fleet_status = if status
+        .observed_state
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true)
+    {
         "offline".to_string()
     } else {
-        status.observed_state.clone()
+        status.observed_state.clone().unwrap_or_else(|| "offline".to_string())
     };
 
     DaemonHealth {
@@ -610,10 +615,14 @@ fn founder_team_to_snapshot_value(team: FleetFounderTeamRecord) -> serde_json::V
         .daemon_statuses
         .iter()
         .map(|status| {
-            let observed_state = (!status.observed_state.trim().is_empty())
-                .then_some(status.observed_state.as_str());
+            let observed_state = status
+                .observed_state
+                .as_deref()
+                .filter(|value| !value.trim().is_empty());
             let target = status
                 .details
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({}))
                 .get("target")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
@@ -635,7 +644,13 @@ fn founder_team_to_snapshot_value(team: FleetFounderTeamRecord) -> serde_json::V
     let evaluated_at = team
         .daemon_statuses
         .iter()
-        .filter_map(|status| (!status.checked_at.trim().is_empty()).then_some(status.checked_at.clone()))
+        .filter_map(|status| {
+            status
+                .checked_at
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+        })
         .max()
         .unwrap_or_default();
 
@@ -685,7 +700,7 @@ fn founder_team_to_snapshot_value(team: FleetFounderTeamRecord) -> serde_json::V
             "observedState": status.observed_state,
             "checkedAt": status.checked_at,
             "source": status.source,
-            "details": status.details,
+            "details": status.details.unwrap_or_else(|| serde_json::json!({})),
         })).collect::<Vec<_>>(),
         "reconcilePreview": {
             "evaluatedAt": evaluated_at,
