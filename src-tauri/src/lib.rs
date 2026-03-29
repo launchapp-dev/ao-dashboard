@@ -1590,9 +1590,13 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
 
         for project in team.projects {
             let project_root = project.ao_project_root.clone();
-            let health = status_by_root.get(&project_root).map(parse_fleet_health_value);
+            let health = status_by_root
+                .get(&project_root)
+                .map(parse_fleet_health_value);
             let workflows = if project.enabled {
-                get_workflows(project_root.clone()).await.unwrap_or_default()
+                get_workflows(project_root.clone())
+                    .await
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };

@@ -123,9 +123,14 @@ function App() {
 
   const refreshProjects = useCallback(async () => {
     const discovered = await invoke<Project[]>("discover_projects");
-    setProjects(discovered);
-    projectsRef.current = discovered;
-    discovered
+    const ordered = [...discovered].sort((left, right) => {
+      return Number(right.enabled) - Number(left.enabled)
+        || left.teamName.localeCompare(right.teamName)
+        || left.name.localeCompare(right.name);
+    });
+    setProjects(ordered);
+    projectsRef.current = ordered;
+    ordered
       .filter((project) => project.enabled)
       .forEach((project) => {
         invoke("start_stream", { projectRoot: project.root }).catch(console.error);

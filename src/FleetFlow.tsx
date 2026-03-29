@@ -44,9 +44,13 @@ function cronToHuman(cron: string): string {
 
 interface Props { health: DaemonHealth[]; events: StreamEvent[]; projects: Project[]; }
 
+function preferredProjectRoot(projects: Project[]) {
+  return projects.find((project) => project.enabled)?.root ?? projects[0]?.root ?? null;
+}
+
 export function FleetFlow({ health, events, projects }: Props) {
   const [configs, setConfigs] = useState<Record<string, ProjectConfig>>({});
-  const [selectedProject, setSelectedProject] = useState<string | null>(projects[0]?.root || null);
+  const [selectedProject, setSelectedProject] = useState<string | null>(preferredProjectRoot(projects));
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["sched", "pipe"]));
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
@@ -66,7 +70,19 @@ export function FleetFlow({ health, events, projects }: Props) {
   }, [configs, selectedProject]);
 
   useEffect(() => {
-    if (!selectedProject && projects.length > 0) setSelectedProject(projects[0].root);
+    if (projects.length === 0) {
+      if (selectedProject !== null) {
+        setSelectedProject(null);
+      }
+      return;
+    }
+
+    const selectedExists = selectedProject
+      ? projects.some((project) => project.root === selectedProject)
+      : false;
+    if (!selectedExists) {
+      setSelectedProject(preferredProjectRoot(projects));
+    }
   }, [projects, selectedProject]);
 
   const activeWorkflows = useMemo(() => {

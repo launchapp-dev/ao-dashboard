@@ -106,6 +106,10 @@ interface Props {
   projects: Project[];
 }
 
+function preferredProjectRoot(projects: Project[]) {
+  return projects.find((project) => project.enabled)?.root ?? projects[0]?.root ?? "";
+}
+
 function groupProjectsByTeam(projects: Project[]) {
   const grouped = new Map<string, { teamName: string; projects: Project[] }>();
 
@@ -131,7 +135,7 @@ function groupProjectsByTeam(projects: Project[]) {
 
 export function TaskWorkbench({ projects }: Props) {
   const projectsByTeam = groupProjectsByTeam(projects);
-  const [selectedProjectRoot, setSelectedProjectRoot] = useState(projects[0]?.root ?? "");
+  const [selectedProjectRoot, setSelectedProjectRoot] = useState(preferredProjectRoot(projects));
   const [prioritized] = useState(false);
   const [loading, setLoading] = useState(false);
   const [, setStatsLoading] = useState(false);
@@ -304,7 +308,7 @@ export function TaskWorkbench({ projects }: Props) {
 
   useEffect(() => {
     if (!projects.some((project) => project.root === selectedProjectRoot)) {
-      setSelectedProjectRoot(projects[0]?.root ?? "");
+      setSelectedProjectRoot(preferredProjectRoot(projects));
     }
   }, [projects, selectedProjectRoot]);
 
