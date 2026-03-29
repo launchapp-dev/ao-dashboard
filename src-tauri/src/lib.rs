@@ -21,18 +21,13 @@ pub struct Project {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct FleetProjectRecord {
-    pub team_id: String,
-    pub slug: String,
-    pub ao_project_root: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 struct FleetTeamRecord {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub mission: String,
+    pub ownership: String,
+    pub business_priority: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +57,46 @@ struct FleetOverviewTeamRecord {
 #[derive(Debug, Deserialize, Clone)]
 struct FleetOverviewResponse {
     pub teams: Vec<FleetOverviewTeamRecord>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetFounderOverviewResponse {
+    pub teams: Vec<FleetFounderTeamRecord>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetFounderTeamRecord {
+    pub fleet: FleetFounderFleetRecord,
+    pub project_host_placements: Vec<FleetProjectPlacementRecord>,
+    pub daemon_statuses: Vec<FleetDaemonStatusRecord>,
+    pub audit_events: Vec<FleetAuditEventRecord>,
+    pub knowledge_documents: Vec<FleetKnowledgeDocumentRecord>,
+    pub knowledge_facts: Vec<FleetKnowledgeFactRecord>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetFounderFleetRecord {
+    pub team: FleetTeamRecord,
+    pub summary: FleetFounderTeamSummary,
+    pub projects: Vec<FleetManagedProjectRecord>,
+    pub schedules: Vec<FleetScheduleRecord>,
+    pub hosts: Vec<FleetHostRecord>,
+    pub reconcile_preview: FleetFounderReconcilePreviewRecord,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetFounderTeamSummary {
+    pub backlog_count: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FleetFounderReconcilePreviewRecord {
+    pub desired_state: String,
+    pub observed_state: String,
+    pub action: String,
+    pub backlog_count: usize,
+    pub schedule_ids: Vec<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -496,6 +531,16 @@ async fn load_fleet_overview() -> Result<FleetOverviewResponse, String> {
     serde_json::from_value(overview_value).map_err(|error| error.to_string())
 }
 
+async fn load_founder_overview(team_id: Option<&str>) -> Result<FleetFounderOverviewResponse, String> {
+    let mut args = vec!["founder-overview"];
+    if let Some(team_id) = team_id {
+        args.push("--team-id");
+        args.push(team_id);
+    }
+    let overview_value = run_fleet_json_cmd_str(&args, 20).await?;
+    serde_json::from_value(overview_value).map_err(|error| error.to_string())
+}
+
 async fn load_fleet_projects() -> Result<Vec<FleetProjectSnapshot>, String> {
     let overview = load_fleet_overview().await?;
     let mut snapshots = overview
@@ -544,6 +589,148 @@ fn parse_fleet_health_value(status: &FleetDaemonStatusRecord) -> DaemonHealth {
         pool_utilization_percent: 0.0,
         healthy: fleet_status == "running",
     }
+}
+
+fn derive_reconcile_action(desired_state: &str, observed_state: Option<&str>) -> Option<&'static str> {
+    match (desired_state, observed_state.unwrap_or("unknown")) {
+        ("running", "running") | ("paused", "paused") | ("stopped", "stopped") => None,
+        ("running", "paused") => Some("resume"),
+        ("running", "stopped") | ("running", "unknown") => Some("start"),
+        ("paused", "running") => Some("pause"),
+        ("paused", "stopped") | ("paused", "unknown") => Some("start_paused"),
+        ("stopped", "running") | ("stopped", "paused") | ("stopped", "unknown") => Some("stop"),
+        _ => None,
+    }
+}
+
+fn founder_team_to_snapshot_value(team: FleetFounderTeamRecord) -> serde_json::Value {
+    let reconcile_preview = &team.fleet.reconcile_preview;
+    let backlog_count = team.fleet.summary.backlog_count.max(reconcile_preview.backlog_count);
+    let reconcile_rows = team
+        .daemon_statuses
+        .iter()
+        .map(|status| {
+            let observed_state = (!status.observed_state.trim().is_empty())
+                .then_some(status.observed_state.as_str());
+            let target = status
+                .details
+                .get("target")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            serde_json::json!({
+                "teamId": team.fleet.team.id,
+                "projectId": status.project_id,
+                "projectRoot": status.project_root,
+                "desiredState": status.desired_state,
+                "observedState": observed_state,
+                "backlogCount": backlog_count,
+                "scheduleIds": reconcile_preview.schedule_ids,
+                "action": derive_reconcile_action(&status.desired_state, observed_state),
+                "target": target,
+                "commandResult": serde_json::Value::Null,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let evaluated_at = team
+        .daemon_statuses
+        .iter()
+        .filter_map(|status| (!status.checked_at.trim().is_empty()).then_some(status.checked_at.clone()))
+        .max()
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "team": {
+            "id": team.fleet.team.id,
+            "slug": team.fleet.team.slug,
+            "name": team.fleet.team.name,
+            "mission": team.fleet.team.mission,
+            "ownership": team.fleet.team.ownership,
+            "businessPriority": team.fleet.team.business_priority,
+        },
+        "projects": team.fleet.projects.into_iter().map(|project| serde_json::json!({
+            "id": project.id,
+            "teamId": project.team_id,
+            "slug": project.slug,
+            "root": project.ao_project_root,
+            "remoteUrl": project.remote_url,
+            "enabled": project.enabled,
+        })).collect::<Vec<_>>(),
+        "schedules": team.fleet.schedules.into_iter().map(|schedule| serde_json::json!({
+            "id": schedule.id,
+            "teamId": schedule.team_id,
+            "timezone": schedule.timezone,
+            "policyKind": schedule.policy_kind,
+            "windows": schedule.windows,
+            "enabled": schedule.enabled,
+        })).collect::<Vec<_>>(),
+        "placements": team.project_host_placements.into_iter().map(|placement| serde_json::json!({
+            "projectId": placement.project_id,
+            "hostId": placement.host_id,
+            "assignmentSource": placement.assignment_source,
+            "assignedAt": placement.assigned_at,
+        })).collect::<Vec<_>>(),
+        "hosts": team.fleet.hosts.into_iter().map(|host| serde_json::json!({
+            "id": host.id,
+            "slug": host.slug,
+            "name": host.name,
+            "address": host.address,
+            "status": host.status,
+        })).collect::<Vec<_>>(),
+        "daemonStatuses": team.daemon_statuses.into_iter().map(|status| serde_json::json!({
+            "projectId": status.project_id,
+            "projectSlug": status.project_slug,
+            "projectRoot": status.project_root,
+            "desiredState": status.desired_state,
+            "observedState": status.observed_state,
+            "checkedAt": status.checked_at,
+            "source": status.source,
+            "details": status.details,
+        })).collect::<Vec<_>>(),
+        "reconcilePreview": {
+            "evaluatedAt": evaluated_at,
+            "apply": false,
+            "teamId": team.fleet.team.id,
+            "desiredState": reconcile_preview.desired_state,
+            "observedState": reconcile_preview.observed_state,
+            "teamAction": reconcile_preview.action,
+            "reason": reconcile_preview.reason,
+            "results": reconcile_rows,
+        },
+        "auditEvents": team.audit_events.into_iter().map(|audit| serde_json::json!({
+            "id": audit.id,
+            "teamId": audit.team_id,
+            "entityType": audit.entity_type,
+            "entityId": audit.entity_id,
+            "action": audit.action,
+            "actorType": audit.actor_type,
+            "actorId": audit.actor_id,
+            "summary": audit.summary,
+            "details": audit.details,
+            "occurredAt": audit.occurred_at,
+        })).collect::<Vec<_>>(),
+        "knowledgeDocuments": team.knowledge_documents.into_iter().map(|document| serde_json::json!({
+            "id": document.id,
+            "scope": document.scope,
+            "scopeRef": document.scope_ref,
+            "kind": document.kind,
+            "title": document.title,
+            "summary": document.summary,
+            "body": document.body,
+            "tags": document.tags,
+            "updatedAt": document.updated_at,
+        })).collect::<Vec<_>>(),
+        "knowledgeFacts": team.knowledge_facts.into_iter().map(|fact| serde_json::json!({
+            "id": fact.id,
+            "scope": fact.scope,
+            "scopeRef": fact.scope_ref,
+            "kind": fact.kind,
+            "statement": fact.statement,
+            "confidence": fact.confidence,
+            "tags": fact.tags,
+            "observedAt": fact.observed_at,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 #[tauri::command]
@@ -1413,253 +1600,25 @@ async fn get_fleet_data() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn get_team_snapshot(team_id: String) -> Result<serde_json::Value, String> {
-    let team = run_fleet_json_cmd_str(&["team-get", "--id", &team_id], 10).await?;
-    let projects_value = run_fleet_json_cmd_str(&["project-list"], 15).await?;
-    let schedules_value =
-        run_fleet_json_cmd_str(&["schedule-list", "--team-id", &team_id], 10).await?;
-    let audits_value =
-        run_fleet_json_cmd_str(&["audit-list", "--team-id", &team_id, "--limit", "40"], 10).await?;
-    let placements_value = run_fleet_json_cmd_str(&["project-host-list"], 10).await?;
-    let hosts_value = run_fleet_json_cmd_str(&["host-list"], 10).await?;
-    let statuses_value =
-        run_fleet_json_cmd_str(&["daemon-status", "--refresh", "--team-id", &team_id], 20).await?;
-    let reconcile_value =
-        run_fleet_json_cmd_str(&["daemon-reconcile", "--team-id", &team_id], 20).await?;
-    let knowledge_documents_value = run_fleet_json_cmd_str(
-        &[
-            "knowledge-document-list",
-            "--scope",
-            "team",
-            "--scope-ref",
-            &team_id,
-            "--limit",
-            "12",
-        ],
-        10,
-    )
-    .await?;
-    let knowledge_facts_value = run_fleet_json_cmd_str(
-        &[
-            "knowledge-fact-list",
-            "--scope",
-            "team",
-            "--scope-ref",
-            &team_id,
-            "--limit",
-            "20",
-        ],
-        10,
-    )
-    .await?;
-
-    let projects: Vec<FleetManagedProjectRecord> =
-        serde_json::from_value(projects_value).map_err(|error| error.to_string())?;
-    let schedules: Vec<FleetScheduleRecord> =
-        serde_json::from_value(schedules_value).map_err(|error| error.to_string())?;
-    let audits: Vec<FleetAuditEventRecord> =
-        serde_json::from_value(audits_value).map_err(|error| error.to_string())?;
-    let placements: Vec<FleetProjectPlacementRecord> =
-        serde_json::from_value(placements_value).map_err(|error| error.to_string())?;
-    let hosts: Vec<FleetHostRecord> =
-        serde_json::from_value(hosts_value.clone()).map_err(|error| error.to_string())?;
-    let statuses: Vec<FleetDaemonStatusRecord> =
-        serde_json::from_value(statuses_value).map_err(|error| error.to_string())?;
-    let knowledge_documents: Vec<FleetKnowledgeDocumentRecord> =
-        serde_json::from_value(knowledge_documents_value).map_err(|error| error.to_string())?;
-    let knowledge_facts: Vec<FleetKnowledgeFactRecord> =
-        serde_json::from_value(knowledge_facts_value).map_err(|error| error.to_string())?;
-
-    let relevant_projects = projects
+    let overview = load_founder_overview(Some(&team_id)).await?;
+    let team = overview
+        .teams
         .into_iter()
-        .filter(|project| project.team_id == team_id)
-        .collect::<Vec<_>>();
-    let relevant_project_ids = relevant_projects
-        .iter()
-        .map(|project| project.id.clone())
-        .collect::<HashSet<_>>();
-    let hosts_by_id = hosts
-        .iter()
-        .cloned()
-        .map(|host| (host.id.clone(), host))
-        .collect::<HashMap<_, _>>();
-
-    let project_rows = relevant_projects
-        .iter()
-        .map(|project| {
-            serde_json::json!({
-                "id": project.id,
-                "teamId": project.team_id,
-                "slug": project.slug,
-                "root": project.ao_project_root,
-                "remoteUrl": project.remote_url,
-                "enabled": project.enabled,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let schedule_rows = schedules
-        .into_iter()
-        .filter(|schedule| schedule.team_id == team_id)
-        .map(|schedule| {
-            serde_json::json!({
-                "id": schedule.id,
-                "teamId": schedule.team_id,
-                "timezone": schedule.timezone,
-                "policyKind": schedule.policy_kind,
-                "windows": schedule.windows,
-                "enabled": schedule.enabled,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let placement_rows = placements
-        .into_iter()
-        .filter(|placement| relevant_project_ids.contains(&placement.project_id))
-        .map(|placement| {
-            let host = hosts_by_id.get(&placement.host_id);
-            serde_json::json!({
-                "projectId": placement.project_id,
-                "hostId": placement.host_id,
-                "hostSlug": host.map(|host| host.slug.clone()),
-                "hostName": host.map(|host| host.name.clone()),
-                "hostAddress": host.map(|host| host.address.clone()),
-                "hostStatus": host.map(|host| host.status.clone()),
-                "assignmentSource": placement.assignment_source,
-                "assignedAt": placement.assigned_at,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let audit_rows = audits
-        .into_iter()
-        .map(|audit| {
-            serde_json::json!({
-                "id": audit.id,
-                "teamId": audit.team_id,
-                "entityType": audit.entity_type,
-                "entityId": audit.entity_id,
-                "action": audit.action,
-                "actorType": audit.actor_type,
-                "actorId": audit.actor_id,
-                "summary": audit.summary,
-                "details": audit.details,
-                "occurredAt": audit.occurred_at,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let status_rows = statuses
-        .into_iter()
-        .map(|status| {
-            serde_json::json!({
-                "projectId": status.project_id,
-                "projectSlug": status.project_slug,
-                "projectRoot": status.project_root,
-                "desiredState": status.desired_state,
-                "observedState": status.observed_state,
-                "checkedAt": status.checked_at,
-                "source": status.source,
-                "details": status.details,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let host_rows = hosts
-        .into_iter()
-        .map(|host| {
-            serde_json::json!({
-                "id": host.id,
-                "slug": host.slug,
-                "name": host.name,
-                "address": host.address,
-                "status": host.status,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let knowledge_document_rows = knowledge_documents
-        .into_iter()
-        .map(|document| {
-            serde_json::json!({
-                "id": document.id,
-                "scope": document.scope,
-                "scopeRef": document.scope_ref,
-                "kind": document.kind,
-                "title": document.title,
-                "summary": document.summary,
-                "body": document.body,
-                "tags": document.tags,
-                "updatedAt": document.updated_at,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let reconcile_rows = reconcile_value["results"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|result| {
-            serde_json::json!({
-                "teamId": result["team_id"].as_str(),
-                "projectId": result["project_id"].as_str(),
-                "projectRoot": result["project_root"].as_str(),
-                "desiredState": result["desired_state"].as_str(),
-                "observedState": result["observed_state"].as_str(),
-                "backlogCount": result["backlog_count"].as_u64(),
-                "scheduleIds": result["schedule_ids"].as_array().cloned().unwrap_or_default(),
-                "action": result["action"].as_str(),
-                "target": result["target"].clone(),
-                "commandResult": result["command_result"].clone(),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let knowledge_fact_rows = knowledge_facts
-        .into_iter()
-        .map(|fact| {
-            serde_json::json!({
-                "id": fact.id,
-                "scope": fact.scope,
-                "scopeRef": fact.scope_ref,
-                "kind": fact.kind,
-                "statement": fact.statement,
-                "confidence": fact.confidence,
-                "tags": fact.tags,
-                "observedAt": fact.observed_at,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    Ok(serde_json::json!({
-        "team": {
-            "id": team["id"].as_str().unwrap_or(""),
-            "slug": team["slug"].as_str().unwrap_or(""),
-            "name": team["name"].as_str().unwrap_or(""),
-            "mission": team["mission"].as_str().unwrap_or(""),
-            "ownership": team["ownership"].as_str().unwrap_or(""),
-            "businessPriority": team["business_priority"].as_i64().unwrap_or(0),
-        },
-        "projects": project_rows,
-        "schedules": schedule_rows,
-        "placements": placement_rows,
-        "hosts": host_rows,
-        "daemonStatuses": status_rows,
-        "reconcilePreview": {
-            "evaluatedAt": reconcile_value["evaluated_at"].as_str().unwrap_or(""),
-            "apply": reconcile_value["apply"].as_bool().unwrap_or(false),
-            "teamId": reconcile_value["team_id"].as_str(),
-            "results": reconcile_rows,
-        },
-        "auditEvents": audit_rows,
-        "knowledgeDocuments": knowledge_document_rows,
-        "knowledgeFacts": knowledge_fact_rows,
-    }))
+        .next()
+        .ok_or_else(|| format!("team {team_id} not found in founder overview"))?;
+    Ok(founder_team_to_snapshot_value(team))
 }
 
 #[tauri::command]
 async fn get_founder_overview() -> Result<serde_json::Value, String> {
-    run_fleet_json_cmd_str(&["fleet-overview"], 20).await
+    let overview = load_founder_overview(None).await?;
+    Ok(serde_json::json!({
+        "teams": overview
+            .teams
+            .into_iter()
+            .map(founder_team_to_snapshot_value)
+            .collect::<Vec<_>>(),
+    }))
 }
 
 fn preset_windows(policy_kind: &str) -> Vec<String> {
